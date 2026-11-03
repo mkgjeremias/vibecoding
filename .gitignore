@@ -1,0 +1,9 @@
+# Skills Claude tierces (non versionnées)
+.claude/
+skills/
+
+node_modules/
+dist/
+dist-artifact/
+*.log
+*.tsbuildinfo

@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+@theme {
+  --color-marine-50: #f0f5fa;
+  --color-marine-100: #dce7f2;
+  --color-marine-600: #2a5384;
+  --color-marine-700: #1e3a5f;
+  --color-marine-800: #172d4a;
+  --color-marine-900: #0f1f33;
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+html, body, #root { height: 100%; }
+body {
+  background: #f1f5f9;
+  color: #0f172a;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Lisibilité en extérieur : focus visible et contrastes renforcés */
+:focus-visible { outline: 3px solid #f59e0b; outline-offset: 2px; }
+
+.leaflet-container { font: inherit; }
+.leaflet-popup-content { margin: 10px 12px; }
