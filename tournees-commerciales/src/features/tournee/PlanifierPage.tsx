@@ -12,6 +12,7 @@ import { CompteFiche } from '../comptes/CompteFiche';
 import { suggerer } from '../suggestions/suggestions';
 import { StopList } from './StopList';
 import { TourMap } from './TourMap';
+import { TourneesPlanifiees } from './TourneesPlanifiees';
 import { nouvelleTournee, trouverTournee } from './tourneeUtils';
 import { useTourneeCalc } from './useTourneeCalc';
 
@@ -135,6 +136,18 @@ export default function PlanifierPage() {
         <section className={`${onglet === 'tournee' ? 'flex' : 'hidden'} w-full flex-col overflow-y-auto bg-slate-50 p-3 md:flex md:w-[26rem] md:shrink-0 md:border-r md:border-slate-200`}>
           <h1 className="text-xl font-bold text-marine-900">Préparer une tournée</h1>
           <p className="mb-3 text-sm text-slate-600 first-letter:uppercase">{fmtDateLongue(datePlanif)}</p>
+
+          <TourneesPlanifiees
+            tournees={data.tournees}
+            commercialId={commercial.id}
+            dateActive={datePlanif}
+            comptes={derived.infos}
+            onOuvrir={(d) => {
+              setDatePlanif(d);
+              setOptimisation(null);
+              setConfirmSuppr(false);
+            }}
+          />
 
           <div className="mb-3 grid grid-cols-2 gap-2">
             <label className="col-span-2 block">
