@@ -219,9 +219,80 @@ table.equipe { width: 100%; border-collapse: collapse; font-size: 14px; }
 }
 #toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+/* ---------- parcours Préparer */
+button.grand { padding: 12px 20px; font-size: 16px; }
+.accueil p { max-width: 70ch; }
+.parcours > .titre-ligne { margin-bottom: 12px; }
+.etapes-parcours { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0; padding: 0; }
+.etapes-parcours li { display: flex; align-items: center; gap: 8px; color: var(--discret); font-weight: 600; }
+.etapes-parcours li.en-cours { color: var(--marque); }
+.etapes-parcours li.faite { color: var(--ok); }
+.pastille-etape { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; border: 2px solid currentColor; }
+.etapes-parcours li.en-cours .pastille-etape { background: var(--marque); color: #fff; border-color: var(--marque); }
+.grille-prep { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.grille-prep > .carte-map { position: sticky; top: 64px; }
+.carte-map.haute { height: calc(100vh - 140px); min-height: 380px; margin: 0; }
+.departements { list-style: none; padding: 0; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.departements li { border: 1px solid var(--bord); border-radius: 8px; padding: 8px 10px; }
+.departements li.choisi { border-color: var(--accent); background: var(--accent-clair); }
+.departements li.plus-charge { border-width: 2px; }
+.departements label { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.dep-nom { flex: 1; font-weight: 600; }
+.dep-total { min-width: 40px; text-align: center; font-weight: 700; font-size: 17px; border-radius: 8px; padding: 2px 8px; background: var(--fond); color: #431407; }
+.dep-detail { font-size: 13px; color: #334155; margin: 2px 0 0 28px; }
+.pin-dep span {
+  width: 100%; height: 100%; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: var(--fond); color: #431407; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35); line-height: 1.05;
+}
+.pin-dep b { font-size: 14px; }
+.pin-dep small { font-size: 10px; }
+.pin-dep.choisi span { border: 3px solid var(--accent); }
+.navigation-parcours { display: flex; justify-content: space-between; gap: 10px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--bord); }
+.filtres-ligne { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin: 10px 0; }
+.filtres-ligne label { display: flex; align-items: center; gap: 6px; }
+.filtres-ligne .actions { margin-left: auto; }
+.compteur-direct {
+  position: sticky; top: 56px; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px;
+  background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; padding: 8px 12px; margin: 10px 0; font-size: 15px;
+}
+.compteur-direct.multi { background: #fff7ed; border-color: #fdba74; }
+.compteur-direct .message { font-size: 13.5px; color: #334155; flex-basis: 100%; }
+.comptes-choix { list-style: none; padding: 0; margin: 0; }
+.comptes-choix li { display: flex; align-items: flex-start; gap: 10px; padding: 9px 4px; border-top: 1px solid var(--bord); }
+.comptes-choix li.choisi { background: var(--accent-clair); }
+.comptes-choix label { flex: 1; display: flex; gap: 10px; align-items: flex-start; cursor: pointer; min-width: 0; }
+.comptes-choix input { margin-top: 4px; }
+.compte-corps { min-width: 0; }
+.compte-titre { font-weight: 600; }
+.raisons { font-size: 13.5px; font-weight: 600; color: #9a3412; }
+.raisons.a-jour { color: var(--ok); font-weight: 500; }
+.bandeau.pret { background: #ecfdf5; border: 1px solid #6ee7b7; color: #065f46; font-weight: 600; }
+.etape.confirmee { border-color: #6ee7b7; background: #f0fdf4; }
+.etape .boutons { flex-direction: column; align-items: flex-end; gap: 4px; }
+.boutons button.ok { background: var(--ok); border-color: var(--ok); color: #fff; }
+.fleches { display: flex; gap: 3px; }
+
+/* ---------- pilotage */
+.pilotage .filtres-ligne { margin: 0 0 14px; }
+.tuiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.tuile { background: var(--panneau); border: 1px solid var(--bord); border-radius: var(--rayon); padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
+.tuile b { font-size: 26px; font-variant-numeric: tabular-nums; color: var(--marque); }
+.tuile span { font-size: 13px; color: var(--discret); }
+.tuile.alerte b { color: var(--danger); }
+.grille-pilotage { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.grille-pilotage .carte-map { height: 380px; margin: 0; }
+.jauges { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 10px; }
+.jauges li { display: grid; grid-template-columns: 170px minmax(0, 1fr) 90px; gap: 10px; align-items: center; font-size: 14px; }
+.jauge { height: 14px; background: #f1f5f9; border-radius: 4px; overflow: hidden; }
+.jauge span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.jauge-val { text-align: right; font-variant-numeric: tabular-nums; }
+
 /* ---------- petits écrans */
 @media (max-width: 960px) {
-  .grille-planifier, .grille-carte { grid-template-columns: 1fr; }
+  .grille-planifier, .grille-carte, .grille-prep, .grille-pilotage { grid-template-columns: 1fr; }
+  .grille-prep > .carte-map { position: static; }
+  .carte-map.haute { height: 55vh; }
+  .jauges li { grid-template-columns: 120px minmax(0, 1fr) 80px; }
   .grille-planifier > .colonne:last-child { position: static; }
   .carte-map.grande { height: 60vh; }
   .profil { margin-left: 0; width: 100%; min-width: 0; }

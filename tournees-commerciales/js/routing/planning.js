@@ -166,6 +166,9 @@ window.TC = window.TC || {};
       const legs = j.stops.map((s) => s.index);
       if (j.planning.retour) legs.push(0);
       for (const idx of legs) {
+        if (TC.geo.estCorse(points[prev]) !== TC.geo.estCorse(points[idx])) {
+          out.push({ niveau: 'alerte', texte: lib + 'le trajet ' + points[prev].nom + ' → ' + points[idx].nom + ' passe par la mer : traversée en ferry non comptée, horaires à revoir.' });
+        }
         const e = TC.geo.estuaireTraverse(points[prev], points[idx]);
         if (e) out.push({ niveau: 'alerte', texte: lib + 'le trajet ' + points[prev].nom + ' → ' + points[idx].nom + ' traverse l’' + e + ' : distance et durée probablement sous-estimées (bac ou détour).' });
         prev = idx;

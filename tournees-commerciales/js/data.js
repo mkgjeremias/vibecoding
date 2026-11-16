@@ -13,7 +13,7 @@ window.TC = window.TC || {};
 (function (TC) {
   'use strict';
   const U = TC.util;
-  const CLE = 'tournees-commerciales.v2';
+  const CLE = 'tournees-commerciales.v3';
 
   function lire() {
     try {

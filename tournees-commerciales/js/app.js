@@ -1,12 +1,14 @@
 /*
  * Interface de l'application (une seule page, navigation par #ancre).
- * Écrans : Planifier, Ma tournée (mobile), Carte, Équipe (manager), Paramètres. Fiche compte en fenêtre.
+ * Commercial : « Préparer » (parcours guidé en 3 étapes) et « Ma tournée » (mobile).
+ * Direction : « Pilotage » et « Paramètres ». Fiche compte en fenêtre.
  */
 (function (TC) {
   'use strict';
   const U = TC.util, R = TC.routing, D = TC.domain, esc = U.esc;
   const CLE_PROFIL = 'tournees-commerciales.profil';
   const COULEURS_JOURS = ['#1d4ed8', '#c2410c', '#15803d', '#7c3aed', '#be185d'];
+  const ETAPES_PREP = ['Où aller ?', 'Qui voir ?', 'Caler les rendez-vous'];
 
   const A = {
     data: null,
@@ -14,18 +16,18 @@
     comptesParId: new Map(),
     today: U.startOfDay(new Date()),
     profil: null,
-    tourneeId: null,
+    route: null,
+    prep: null, // parcours Préparer en cours : { etape, departements, date, selection, activite, type, aVoirSeulement, tourneeId }
     maTourneeId: null,
     maJour: 0,
     maJourPour: null,
     crOuvert: null,
     cr: null,
-    recherche: '',
-    filtres: null,
+    pilotage: { periodeJours: 28, secteurId: 'tous', activite: 'toutes' },
     cartes: [],
-    coucheComptes: null,
     ficheId: null,
     drag: null,
+    vue: {},
   };
 
   // ------------------------------------------------------------------ données
@@ -42,6 +44,7 @@
   const secteur = (id) => A.data.secteurs.find((s) => s.id === id);
   const tournee = (id) => A.data.tournees.find((t) => t.id === id);
   const P = () => A.data.parametres;
+  const nomDep = (d) => d + ' · ' + (D.DEPARTEMENTS[d] || d);
 
   function lireProfil() {
     try {
@@ -50,8 +53,8 @@
     } catch (e) {
       /* rien */
     }
-    const lim = A.data.commerciaux.find((c) => c.secteurId === 'limousin') || A.data.commerciaux[0];
-    return { kind: 'commercial', commercialId: lim.id };
+    const fc = A.data.commerciaux.find((c) => c.secteurId === 'FC') || A.data.commerciaux[0];
+    return { kind: 'commercial', commercialId: fc.id };
   }
   function ecrireProfil() {
     try {
@@ -75,7 +78,14 @@
     const prospection = (j) => (t.prospection || []).includes(j);
     const plan = R.planifierTournee({ m, stops, params: p, multiJours: !!t.multiJours, prospection });
     const analyse = !t.multiJours && stops.length ? R.analyserDecoupage(m, stops, p, prospection) : null;
-    return { com, comptes, points, m, plan, analyse, alertes: R.alertes(plan, points, p), dates: R.datesJours(t.date, plan.jours.length) };
+    const confirmes = t.etapes.filter((e) => e.confirme).length;
+    return {
+      com, comptes, points, m, plan, analyse,
+      alertes: R.alertes(plan, points, p),
+      dates: R.datesJours(t.date, plan.jours.length),
+      confirmes,
+      prete: t.etapes.length > 0 && confirmes === t.etapes.length,
+    };
   }
 
   /** Tournées dont le dernier jour n'est pas passé, triées par date. */
@@ -88,39 +98,36 @@
       .sort((a, b) => a.t.date.localeCompare(b.t.date));
   }
 
+  function enregistrerTournee(t) {
+    t.modifieeLe = U.isoDateTime(new Date());
+    if (!A.data.tournees.includes(t)) A.data.tournees.push(t);
+    TC.dataService.saveTournee(t);
+  }
   function majTournee(t, fn) {
     fn(t);
-    t.modifieeLe = U.isoDateTime(new Date());
-    TC.dataService.saveTournee(t);
+    enregistrerTournee(t);
     render();
   }
-
   function deplacer(t, de, vers) {
-    if (de === vers || vers < 0 || vers >= t.etapes.length) return;
+    if (!t || de === vers || vers < 0 || vers >= t.etapes.length) return;
     majTournee(t, (x) => {
       const [e] = x.etapes.splice(de, 1);
       x.etapes.splice(vers, 0, e);
     });
   }
 
-  function ajouterEtape(t, compteId, jour) {
-    if (t.etapes.some((e) => e.compteId === compteId)) return;
-    const k = calc(t);
-    majTournee(t, (x) => {
-      const e = { compteId };
-      if (jour != null && k.plan.jours[jour] && k.plan.jours[jour].stops.length) {
-        // créneau prospection : juste après la dernière visite du jour
-        x.etapes.splice(k.plan.jours[jour].stops.at(-1).index, 0, e);
-      } else {
-        // ailleurs : à la position qui allonge le moins le circuit
-        const c = compte(compteId);
-        const pts = [...k.points, { lat: c.lat, lng: c.lng }];
-        const m = R.matrix(pts, P());
-        const pos = R.meilleureInsertion(x.etapes.map((_, i) => i + 1), pts.length - 1, m.km);
-        x.etapes.splice(pos, 0, e);
-      }
-    });
-    toast('Compte ajouté à la tournée');
+  /** Ordre optimisé d'une liste de comptes depuis le domicile, avec estimation (visites, km, jours). */
+  function estimer(com, ids) {
+    const p = P();
+    if (!ids.length) return { visites: 0, km: 0, jours: 0, ordre: [] };
+    const comptes = ids.map(compte);
+    const m = R.matrix([com.domicile, ...comptes], p);
+    const ordre = R.optimizeOrder(m.km);
+    const stops = ordre.map((i) => ({ index: i, dureeMin: p.dureeRdvMin }));
+    const un = R.planifierTournee({ m, stops, params: p, multiJours: false });
+    const tient = un.jours[0].planning.finMin <= R.finUtileMin(p);
+    const plan = tient ? un : R.planifierTournee({ m, stops, params: p, multiJours: true });
+    return { visites: ids.length, km: plan.totalKm, jours: plan.jours.length, ordre: ordre.map((i) => ids[i - 1]) };
   }
 
   // ------------------------------------------------------------------ petits composants
@@ -133,10 +140,9 @@
   }
   function mentionEstimation() {
     const p = P();
-    const prov = R.getProvider();
     return (
-      'Distances et horaires sont des <b>estimations</b> (' + esc(prov.label) + ' : distance × ' + String(p.coefRoutier).replace('.', ',') + ', ' +
-      p.vitesseMoyenneKmh + ' km/h, marge trajet ' + p.margeTrajetPct + ' %). Heures proposées pour la prise de rendez-vous.'
+      'Distances et horaires <b>estimés</b> (vol d’oiseau × ' + String(p.coefRoutier).replace('.', ',') + ', ' +
+      p.vitesseMoyenneKmh + ' km/h, trajets majorés de ' + p.margeTrajetPct + ' %).'
     );
   }
   function alertesHtml(alertes) {
@@ -148,6 +154,16 @@
     return s.charAt(0).toUpperCase() + s.slice(1);
   }
   const telLien = (t) => '<a href="tel:' + esc(t.replace(/\s/g, '')) + '">' + esc(t) + '</a>';
+  const pct = (x) => Math.round(x * 100) + ' %';
+  function raisonsHtml(info) {
+    const a = info.aVoir;
+    if (a && a.est) return '<span class="raisons">' + esc(a.raisons.join(' · ')) + '</span>';
+    return '<span class="raisons a-jour">à jour (vu ' + esc(U.fmtAnciennete(info.derniereVisite, A.today)) + ')</span>';
+  }
+  function badgeStatutTournee(k) {
+    if (k.prete) return '<span class="badge" style="--c:#15803d">Prête</span>';
+    return '<span class="badge" style="--c:#b45309">' + k.confirmes + '/' + k.plan.nbVisites + ' RDV confirmés</span>';
+  }
   function toast(msg) {
     const el = document.getElementById('toast');
     el.textContent = msg;
@@ -163,19 +179,25 @@
    */
   const FOND_DE_CARTE = {
     url: 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/png&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}',
-    options: {
-      minZoom: 2,
-      maxZoom: 18,
-      attribution: '© <a href="https://www.ign.fr/">IGN</a> – Géoplateforme',
-    },
+    options: { minZoom: 2, maxZoom: 18, attribution: '© <a href="https://www.ign.fr/">IGN</a> – Géoplateforme' },
   };
   function nouvelleCarte(el) {
     const map = L.map(el, { preferCanvas: true, zoomSnap: 0.5 });
     const fond = L.tileLayer(FOND_DE_CARTE.url, FOND_DE_CARTE.options).addTo(map);
-    // si le fond ne se charge pas (pas de réseau, page intégrée qui bloque les images externes), on le dit
-    fond.once('tileerror', () => {
-      const msg = L.DomUtil.create('div', 'carte-sans-fond', el);
-      msg.textContent = 'Fond de carte indisponible ici (réseau ou page intégrée) : les comptes et trajets restent affichés.';
+    // message seulement si aucune tuile ne se charge (pas de réseau, page intégrée qui bloque les images externes)
+    let tuilesChargees = 0;
+    let msg = null;
+    fond.on('tileload', () => {
+      tuilesChargees++;
+      if (msg) {
+        msg.remove();
+        msg = null;
+      }
+    });
+    fond.on('tileerror', () => {
+      if (tuilesChargees || msg) return;
+      msg = L.DomUtil.create('div', 'carte-sans-fond', el);
+      msg.textContent = 'Fond de carte indisponible ici (réseau ou page intégrée) : les informations restent affichées.';
     });
     A.cartes.push(map);
     return map;
@@ -183,75 +205,311 @@
   function detruireCartes() {
     A.cartes.forEach((m) => m.remove());
     A.cartes = [];
-    A.coucheComptes = null;
   }
-  function popupCompte(c, ajout) {
+  function popupCompte(c) {
     const info = A.der.infos.get(c.id);
     return (
       '<div class="popup"><b>' + esc(c.raisonSociale) + '</b><br>' + esc(c.commune) + ' · ' + D.STATUT_LABEL[info.statut] +
-      '<div class="popup-actions"><button data-action="fiche" data-id="' + c.id + '">Fiche</button>' +
-      (ajout ? '<button data-action="ajouter" data-id="' + c.id + '">Ajouter</button>' : '') + '</div></div>'
+      '<div class="popup-actions"><button data-action="fiche" data-id="' + c.id + '">Fiche</button></div></div>'
     );
   }
   const ll = (p) => [p.lat, p.lng];
+  function pinDomicile(map, com) {
+    L.marker(ll(com.domicile), { icon: L.divIcon({ className: 'pin-domicile', html: '⌂', iconSize: [28, 28] }) })
+      .addTo(map)
+      .bindTooltip('Domicile · ' + esc(com.domicile.commune));
+  }
 
-  // ================================================================== PLANIFIER
-  function vuePlanifier() {
-    const com = commercial(A.profil.commercialId);
-    const tours = tourneesAVenir(com.id);
-    if (!tours.some((x) => x.t.id === A.tourneeId)) A.tourneeId = tours.length ? tours[0].t.id : null;
-    const t = A.tourneeId ? tournee(A.tourneeId) : null;
-    const k = t ? calc(t) : null;
-    A.vue = { t, k };
+  /** Centre de chaque département, calculé une fois depuis le référentiel des communes. */
+  let centresDep = null;
+  function centreDepartement(d) {
+    if (!centresDep) {
+      centresDep = new Map();
+      for (const x of window.TC_COMMUNES || []) {
+        const e = centresDep.get(x[1]) || { lat: 0, lng: 0, n: 0 };
+        e.lat += x[2];
+        e.lng += x[3];
+        e.n += 1;
+        centresDep.set(x[1], e);
+      }
+    }
+    const e = centresDep.get(d);
+    return e ? { lat: e.lat / e.n, lng: e.lng / e.n } : null;
+  }
+  /** Couleur d'intensité (jaune pâle → orange brûlé) pour une part entre 0 et 1. */
+  function couleurCharge(t) {
+    const pal = ['#fef3c7', '#fcd34d', '#f59e0b', '#ea580c', '#9a3412'];
+    return pal[Math.min(pal.length - 1, Math.floor(Math.max(0, t) * pal.length))];
+  }
+
+  // ================================================================== PRÉPARER
+  function nouvellePrep() {
+    return {
+      etape: 1,
+      departements: new Set(),
+      date: U.isoDay(U.prochainJourTournee(A.today, false)),
+      selection: new Set(),
+      activite: 'toutes',
+      type: 'tous',
+      aVoirSeulement: true,
+      tourneeId: null,
+    };
+  }
+  function ouvrirTournee(t) {
+    A.prep = Object.assign(nouvellePrep(), {
+      etape: 3,
+      tourneeId: t.id,
+      date: t.date,
+      departements: new Set(t.departements && t.departements.length ? t.departements : t.etapes.map((e) => compte(e.compteId).departement)),
+      selection: new Set(t.etapes.map((e) => e.compteId)),
+    });
+  }
+  const mesInfos = () => [...A.der.infos.values()].filter((i) => i.compte.commercialId === A.profil.commercialId);
+
+  function vuePreparer() {
+    if (!A.prep) return accueilPreparer();
+    const e = A.prep.etape;
+    const stepper =
+      '<ol class="etapes-parcours">' + ETAPES_PREP.map((lib, i) =>
+        '<li class="' + (i + 1 === e ? 'en-cours' : i + 1 < e ? 'faite' : '') + '"' + (i + 1 === e ? ' aria-current="step"' : '') + '>' +
+        '<span class="pastille-etape">' + (i + 1 < e ? '✓' : i + 1) + '</span>' + lib + '</li>').join('') +
+      '</ol>';
+    const corps = e === 1 ? prepEtape1() : e === 2 ? prepEtape2() : prepEtape3();
+    return '<div class="parcours"><div class="titre-ligne">' + stepper +
+      '<button class="lien" data-action="prep-quitter">← Mes tournées</button></div>' + corps + '</div>';
+  }
+
+  function accueilPreparer() {
+    const tours = tourneesAVenir(A.profil.commercialId);
+    const aVoir = mesInfos().filter((i) => i.aVoir.est).length;
+    const items = tours.map(({ t, k }) => {
+      const n = k.plan.jours.length;
+      return (
+        '<li><button class="tournee-item" data-action="prep-ouvrir" data-id="' + t.id + '">' +
+        '<b>' + esc(libelleJour(t.date)) + '</b>' +
+        '<span>' + U.nb(k.plan.nbVisites, 'visite') + ' · ' + U.fmtKm(k.plan.totalKm) + (n > 1 ? ' · ' + n + ' jours' : '') + '</span>' +
+        '<span class="meta">' + esc((t.departements || []).map((d) => D.DEPARTEMENTS[d] || d).join(', ')) + '</span>' +
+        badgeStatutTournee(k) + '</button></li>'
+      );
+    }).join('');
     return (
-      '<div class="grille-planifier"><div class="colonne">' +
-      listeTournees(tours) +
-      (t ? editeur(t, k) : '<section class="panneau vide">Aucune tournée prévue. Créez-en une avec « Nouvelle tournée ».</section>') +
-      '</div><div class="colonne"><div id="carte-tournee" class="carte-map"></div>' +
-      (t ? panneauAjout(t, k) : '') +
-      '</div></div>'
+      '<section class="panneau accueil"><h2>Préparer une tournée</h2>' +
+      '<p>Vous avez <b>' + U.nb(aVoir, 'compte') + ' à voir</b> dans votre secteur : en retard sur leur fréquence de visite, à risque, avec un devis en attente ou prospects chauds.</p>' +
+      '<p class="aide">Trois étapes : choisir où aller, choisir qui voir, puis caler les rendez-vous aux heures proposées.</p>' +
+      '<button class="primaire grand" data-action="prep-nouvelle">Préparer une nouvelle tournée</button></section>' +
+      '<section class="panneau"><h2>Mes tournées préparées</h2>' +
+      (items ? '<ul class="liste-tournees">' + items + '</ul>' : '<p class="aide">Aucune tournée à venir.</p>') + '</section>'
     );
   }
 
-  function listeTournees(tours) {
-    const items = tours
-      .map(({ t, k }) => {
-        const n = k.plan.jours.length;
-        return (
-          '<li><button class="tournee-item' + (t.id === A.tourneeId ? ' actif' : '') + '" data-action="choisir-tournee" data-id="' + t.id + '">' +
-          '<b>' + esc(U.fmtDateCourte(t.date)) + '</b>' + (n > 1 ? ' <span class="badge" style="--c:#7c3aed">' + n + ' jours</span>' : '') +
-          '<span>' + U.nb(k.plan.nbVisites, 'visite') + ' · ' + U.fmtKm(k.plan.totalKm) + '</span></button></li>'
-        );
-      })
-      .join('');
+  // ---------- étape 1 : où aller ?
+  function prepEtape1() {
+    const com = commercial(A.profil.commercialId);
+    const sec = secteur(com.secteurId);
+    const charges = D.chargeParDepartement(mesInfos());
+    const parDep = new Map(charges.map((c) => [c.departement, c]));
+    const lignes = sec.departements
+      .map((d) => parDep.get(d) || { departement: d, comptes: 0, aVoir: 0, retard: 0, risque: 0, devis: 0, chaud: 0 })
+      .sort((a, b) => b.aVoir - a.aVoir || a.departement.localeCompare(b.departement));
+    A.vue.charges = lignes;
+    const max = lignes.length ? lignes[0].aVoir : 0;
+    const p = A.prep;
+    const detail = (c) => [
+      c.retard ? U.nb(c.retard, 'en retard', 'en retard') : '',
+      c.risque ? U.nb(c.risque, 'client à risque', 'clients à risque') : '',
+      c.devis ? U.nb(c.devis, 'devis en attente', 'devis en attente') : '',
+      c.chaud ? U.nb(c.chaud, 'prospect chaud', 'prospects chauds') : '',
+    ].filter(Boolean).join(' · ');
     return (
-      '<section class="panneau"><div class="titre-ligne"><h2>Tournées planifiées</h2>' +
-      '<button class="primaire" data-action="nouvelle-tournee">+ Nouvelle tournée</button></div>' +
-      (items ? '<ul class="liste-tournees">' + items + '</ul>' : '<p class="aide">Aucune tournée à venir.</p>') +
+      '<div class="grille-prep"><section class="panneau"><h2>1. Où aller ?</h2>' +
+      '<p class="aide">Nombre de comptes à voir par département. Choisissez un ou plusieurs départements.</p>' +
+      '<ul class="departements">' + lignes.map((c, i) =>
+        '<li class="' + (p.departements.has(c.departement) ? 'choisi' : '') + (i === 0 && c.aVoir ? ' plus-charge' : '') + '">' +
+        '<label><input type="checkbox" data-action="prep-dep" value="' + c.departement + '"' + (p.departements.has(c.departement) ? ' checked' : '') + '>' +
+        '<span class="dep-nom">' + esc(nomDep(c.departement)) + (i === 0 && c.aVoir ? ' <span class="badge" style="--c:#9a3412">Le plus chargé</span>' : '') + '</span>' +
+        '<span class="dep-total" style="--fond:' + couleurCharge(max ? c.aVoir / max : 0) + '">' + c.aVoir + '</span></label>' +
+        '<div class="dep-detail">' + (c.aVoir ? esc(detail(c)) : 'Rien d’urgent') + ' <span class="meta">· ' + U.nb(c.comptes, 'compte') + '</span></div></li>').join('') +
+      '</ul>' +
+      '<label class="champ-date">Date de début <input type="date" data-action="prep-date" value="' + p.date + '"></label>' +
+      (U.estJourTournee(U.parseDay(p.date)) ? '' : '<p class="alerte-ligne">Les tournées ont lieu du mardi au vendredi (lundi au bureau).</p>') +
+      '<div class="navigation-parcours"><span></span><button class="primaire" data-action="prep-suivant"' + (p.departements.size ? '' : ' disabled') + '>Suivant : qui voir ? →</button></div>' +
+      '</section><div id="carte-prep" class="carte-map haute"></div></div>'
+    );
+  }
+  function apresEtape1() {
+    const el = document.getElementById('carte-prep');
+    const map = nouvelleCarte(el);
+    const com = commercial(A.profil.commercialId);
+    pinDomicile(map, com);
+    const lignes = A.vue.charges;
+    const max = lignes.length ? Math.max(1, lignes[0].aVoir) : 1;
+    const bornes = [ll(com.domicile)];
+    for (const c of lignes) {
+      const ctr = centreDepartement(c.departement);
+      if (!ctr) continue;
+      // la Corse n'entre dans le cadrage que si elle est choisie (sinon la carte dézoome trop)
+      if (!TC.geo.estCorse(ctr) || A.prep.departements.has(c.departement)) bornes.push(ll(ctr));
+      const taille = 34 + Math.round(26 * Math.sqrt(c.aVoir / max));
+      const choisi = A.prep.departements.has(c.departement);
+      L.marker(ll(ctr), {
+        icon: L.divIcon({
+          className: 'pin-dep' + (choisi ? ' choisi' : ''),
+          html: '<span style="--fond:' + couleurCharge(c.aVoir / max) + '"><b>' + c.aVoir + '</b><small>' + c.departement + '</small></span>',
+          iconSize: [taille, taille],
+        }),
+      })
+        .addTo(map)
+        .bindTooltip(esc(nomDep(c.departement)) + ' : ' + c.aVoir + ' à voir')
+        .on('click', () => {
+          A.prep.departements.has(c.departement) ? A.prep.departements.delete(c.departement) : A.prep.departements.add(c.departement);
+          render();
+        });
+    }
+    map.fitBounds(bornes, { padding: [30, 30] });
+  }
+
+  // ---------- étape 2 : qui voir ?
+  function candidatsEtape2() {
+    const p = A.prep;
+    return D.trierParPriorite(
+      mesInfos().filter((i) => {
+        const c = i.compte;
+        if (p.selection.has(c.id)) return true;
+        if (!p.departements.has(c.departement)) return false;
+        if (c.etape === 'perdu' || c.etape === 'gagne') return false;
+        if (p.activite !== 'toutes' && !(c.activites || []).includes(p.activite)) return false;
+        if (p.type !== 'tous' && c.type !== p.type) return false;
+        if (p.aVoirSeulement && !i.aVoir.est) return false;
+        return true;
+      }),
+      A.today,
+    );
+  }
+  function prepEtape2() {
+    const p = A.prep;
+    const com = commercial(A.profil.commercialId);
+    const liste = candidatsEtape2();
+    const est = estimer(com, [...p.selection]);
+    const message = !est.visites
+      ? 'Cochez des comptes, ou utilisez la présélection automatique.'
+      : est.jours > 1
+        ? 'La sélection dépasse une journée : la tournée passera sur ' + est.jours + ' jours (nuit sur place). Vous pourrez accepter ou refuser à l’étape suivante.'
+        : 'La sélection tient sur une journée.';
+    return (
+      '<section class="panneau"><h2>2. Qui voir ?</h2>' +
+      '<p class="aide">Départements : ' + esc([...p.departements].map(nomDep).join(', ')) + '. Les comptes les plus urgents sont en haut.</p>' +
+      '<div class="filtres-ligne">' +
+      '<label>Activité <select data-action="prep-activite"><option value="toutes">Toutes</option>' +
+      D.ACTIVITES.map((a) => '<option value="' + a + '"' + (p.activite === a ? ' selected' : '') + '>' + D.ACTIVITE_LABEL[a] + '</option>').join('') + '</select></label>' +
+      '<label>Type <select data-action="prep-type"><option value="tous">Tous</option>' +
+      D.TYPES.map((t) => '<option value="' + t + '"' + (p.type === t ? ' selected' : '') + '>' + D.TYPE_LABEL[t] + '</option>').join('') + '</select></label>' +
+      '<label class="case"><input type="checkbox" data-action="prep-a-voir"' + (p.aVoirSeulement ? ' checked' : '') + '> Seulement les comptes à voir</label>' +
+      '<div class="actions"><button class="primaire" data-action="prep-preselection">Présélection automatique</button>' +
+      (p.selection.size ? '<button data-action="prep-vider">Tout décocher</button>' : '') + '</div></div>' +
+      '<div class="compteur-direct' + (est.jours > 1 ? ' multi' : '') + '" role="status" aria-live="polite">' +
+      '<span><b>' + U.nb(est.visites, 'visite') + '</b></span><span><b>' + U.fmtKm(est.km) + '</b> estimés</span><span><b>' + U.nb(est.jours, 'jour') + '</b></span>' +
+      '<span class="message">' + message + '</span></div>' +
+      (liste.length
+        ? '<ul class="comptes-choix">' + liste.map((i) => {
+            const c = i.compte;
+            const coche = p.selection.has(c.id);
+            return (
+              '<li class="' + (coche ? 'choisi' : '') + '"><label><input type="checkbox" data-action="prep-compte" value="' + c.id + '"' + (coche ? ' checked' : '') + '>' +
+              '<span class="compte-corps"><span class="compte-titre">' + esc(c.raisonSociale) + '</span> ' +
+              '<span class="meta">' + esc(c.commune) + ' (' + c.departement + ') · ' + D.TYPE_LABEL[c.type] + ' · ' + (c.activites || []).map((a) => D.ACTIVITE_LABEL[a]).join(', ') + '</span><br>' +
+              raisonsHtml(i) + '</span></label>' +
+              '<button class="lien" data-action="fiche" data-id="' + c.id + '">Fiche</button></li>'
+            );
+          }).join('') + '</ul>'
+        : '<p class="aide">Aucun compte ne correspond à ces filtres.</p>') +
+      '<p class="estimation">' + mentionEstimation() + '</p>' +
+      '<div class="navigation-parcours"><button data-action="prep-retour">← Retour</button>' +
+      '<button class="primaire" data-action="prep-suivant"' + (p.selection.size ? '' : ' disabled') + '>Suivant : caler les rendez-vous →</button></div>' +
       '</section>'
     );
   }
 
-  function editeur(t, k) {
-    const p = P();
+  /** Remplit la sélection avec les comptes à voir les plus urgents, tant que la tournée tient dans le temps disponible. */
+  function preselectionner() {
+    const p = A.prep;
+    const com = commercial(A.profil.commercialId);
+    const cands = candidatsEtape2().filter((i) => i.aVoir.est && !p.selection.has(i.compte.id));
+    const sel = [...p.selection];
+    // une journée ; deux si le premier compte est à plus du seuil de route aller (on dort sur place)
+    let cible = 1;
+    const ancre = sel.length ? compte(sel[0]) : cands.length ? cands[0].compte : null;
+    if (ancre) {
+      const m = R.matrix([com.domicile, ancre], P());
+      if (m.minutesBrutes[0][1] > P().seuilAllerMultiJoursMin || estimer(com, [ancre.id]).jours > 1) cible = 2;
+    }
+    if (sel.length) cible = Math.max(cible, estimer(com, sel).jours);
+    let essais = 0;
+    for (const i of cands) {
+      if (sel.length >= 12 || essais >= 30) break;
+      essais++;
+      const test = [...sel, i.compte.id];
+      if (estimer(com, test).jours <= cible) sel.push(i.compte.id);
+    }
+    if (!sel.length && cands.length) sel.push(cands[0].compte.id);
+    p.selection = new Set(sel);
+    toast(U.nb(sel.length, 'compte présélectionné', 'comptes présélectionnés'));
+  }
+
+  /** Crée ou met à jour la tournée à partir de la sélection (étape 2 → étape 3). */
+  function creerOuMajTournee() {
+    const p = A.prep;
+    const com = commercial(A.profil.commercialId);
+    const ids = [...p.selection];
+    const deps = [...new Set(ids.map((id) => compte(id).departement))].sort();
+    let t = p.tourneeId ? tournee(p.tourneeId) : null;
+    if (!t) {
+      const now = U.isoDateTime(new Date());
+      t = { id: U.uid('t'), commercialId: com.id, date: p.date, departements: deps, multiJours: false, decoupageRefuse: false, prospection: [], etapes: estimer(com, ids).ordre.map((id) => ({ compteId: id, confirme: false })), creeLe: now, modifieeLe: now };
+      p.tourneeId = t.id;
+    } else {
+      // on garde l'ordre et les rendez-vous déjà confirmés, on insère les nouveaux au moindre détour
+      t.date = p.date;
+      t.departements = deps;
+      t.etapes = t.etapes.filter((e) => p.selection.has(e.compteId));
+      for (const id of ids) {
+        if (t.etapes.some((e) => e.compteId === id)) continue;
+        const pts = [com.domicile, ...t.etapes.map((e) => compte(e.compteId)), compte(id)];
+        const m = R.matrix(pts, P());
+        const pos = R.meilleureInsertion(t.etapes.map((_, i) => i + 1), pts.length - 1, m.km);
+        t.etapes.splice(pos, 0, { compteId: id, confirme: false });
+      }
+    }
+    enregistrerTournee(t);
+  }
+
+  // ---------- étape 3 : caler les rendez-vous
+  function prepEtape3() {
+    const t = tournee(A.prep.tourneeId);
+    if (!t) {
+      A.prep.etape = 2;
+      return prepEtape2();
+    }
+    const k = calc(t);
+    A.vue = { t, k };
     const n = k.plan.jours.length;
     const fin = k.plan.jours[n - 1].planning.finMin;
-    const jourNonTournee = !U.estJourTournee(U.parseDay(t.date));
     return (
-      '<section class="panneau">' +
-      '<div class="titre-ligne"><label class="champ-date">' + (n > 1 ? 'Premier jour' : 'Date') +
-      ' <input type="date" value="' + t.date + '" data-action="date-tournee"></label>' +
-      '<div class="actions"><button data-action="optimiser" ' + (t.etapes.length < 2 ? 'disabled' : '') + '>Optimiser l’ordre</button>' +
-      '<button class="lien danger" data-action="supprimer-tournee">Supprimer</button></div></div>' +
-      (jourNonTournee ? '<p class="alerte-ligne">Ce jour n’est pas un jour de tournée : lundi au bureau, tournées du mardi au vendredi.</p>' : '') +
+      '<div class="grille-prep"><section class="panneau"><h2>3. Caler les rendez-vous</h2>' +
+      '<p class="aide">Appelez chaque compte en proposant l’heure indiquée, puis cliquez sur « Rendez-vous confirmé ». Glissez les visites pour changer l’ordre : horaires et kilomètres sont recalculés.</p>' +
+      '<div class="titre-ligne"><label class="champ-date">' + (n > 1 ? 'Premier jour' : 'Date') + ' <input type="date" value="' + t.date + '" data-action="date-tournee"></label>' +
+      '<div class="actions"><button data-action="optimiser"' + (t.etapes.length < 2 ? ' disabled' : '') + '>Recalculer le meilleur ordre</button>' +
+      '<button class="lien danger" data-action="supprimer-tournee">Supprimer la tournée</button></div></div>' +
       '<div class="resume"><span><b>' + k.plan.nbVisites + '</b> visite' + (k.plan.nbVisites > 1 ? 's' : '') + '</span><span><b>' + U.fmtKm(k.plan.totalKm) + '</b></span>' +
-      '<span><b>' + n + '</b> jour' + (n > 1 ? 's' : '') + '</span>' +
-      (t.etapes.length ? '<span>retour prévu <b>' + U.fmtHeure(fin) + '</b></span>' : '') + '</div>' +
+      '<span><b>' + n + '</b> jour' + (n > 1 ? 's' : '') + '</span>' + (t.etapes.length ? '<span>retour prévu <b>' + U.fmtHeure(fin) + '</b></span>' : '') + '</div>' +
+      (k.prete
+        ? '<div class="bandeau pret">✓ Tournée prête : tous les rendez-vous sont confirmés.</div>'
+        : '<div class="bandeau discret">' + k.confirmes + ' rendez-vous confirmés sur ' + k.plan.nbVisites + '. La tournée sera prête quand tous seront confirmés.</div>') +
       '<p class="estimation">' + mentionEstimation() + '</p>' +
-      blocDecoupage(t, k) +
-      alertesHtml(k.alertes) +
-      (t.etapes.length ? k.plan.jours.map((j, i) => jourHtml(t, k, j, i)).join('') : '<p class="aide">Tournée vide : ajoutez des comptes depuis les suggestions ou la recherche.</p>') +
-      '</section>'
+      blocDecoupage(t, k) + alertesHtml(k.alertes) +
+      (t.etapes.length ? k.plan.jours.map((j, i) => jourHtml(t, k, j, i)).join('') : '<p class="aide">Tournée vide : revenez à l’étape 2 pour choisir des comptes.</p>') +
+      '<div class="navigation-parcours"><button data-action="prep-retour">← Retour : qui voir ?</button>' +
+      '<button class="primaire" data-action="prep-quitter">Terminer</button></div>' +
+      '</section><div id="carte-tournee" class="carte-map haute"></div></div>'
     );
   }
 
@@ -268,19 +526,19 @@
     const a = k.analyse;
     if (!a || !a.propose) return '';
     if (t.decoupageRefuse) {
-      return '<div class="bandeau discret">Découpage en ' + a.nbJours + ' jours refusé. <button class="lien" data-action="revoir-decoupage">Revoir la proposition</button></div>';
+      return '<div class="bandeau discret">Passage à ' + a.nbJours + ' jours refusé. <button class="lien" data-action="revoir-decoupage">Revoir la proposition</button></div>';
     }
     const raisons = a.raisons.map((r) => {
       if (r.type === 'eloigne') {
         const noms = r.indices.map((i) => esc(k.comptes[i - 1].commune)).join(', ');
         return r.indices.length + ' visite' + (r.indices.length > 1 ? 's' : '') + ' à plus de ' + U.fmtDuree(p.seuilAllerMultiJoursMin) + ' de route du domicile (' + noms + ')';
       }
-      return 'retour prévu à ' + U.fmtHeure(r.finMin) + ' sur une seule journée, après ' + U.fmtHeure(U.hhmmToMin(p.heureLimiteRetour));
+      return 'sur une seule journée, retour prévu à ' + U.fmtHeure(r.finMin) + ', après ' + U.fmtHeure(U.hhmmToMin(p.heureLimiteRetour));
     });
     return (
-      '<div class="bandeau proposition"><b>Proposition : répartir cette tournée sur ' + a.nbJours + ' jours.</b>' +
+      '<div class="bandeau proposition"><b>Proposition : faire cette tournée sur ' + a.nbJours + ' jours.</b>' +
       '<ul>' + raisons.map((r) => '<li>' + r + '</li>').join('') + '</ul>' +
-      '<p>L’ordre de passage est conservé. Chaque soir, nuit dans la commune de la dernière visite ; le dernier jour se termine au domicile.</p>' +
+      '<p>L’ordre des visites est conservé. Chaque soir, nuit dans la commune de la dernière visite ; le dernier jour se termine au domicile.</p>' +
       '<div class="actions"><button class="primaire" data-action="accepter-decoupage">Accepter (' + a.nbJours + ' jours)</button>' +
       '<button data-action="refuser-decoupage">Refuser, garder une journée</button></div></div>'
     );
@@ -303,46 +561,43 @@
       if (s.pauseAvantMin) {
         html += '<li class="pause">Pause déjeuner ' + U.fmtHeure(s.arriveeMin) + ' – ' + U.fmtHeure(s.arriveeMin + s.pauseAvantMin) + '</li>';
       }
+      const decale = e.confirme && e.heureConfirmee != null && e.heureConfirmee !== s.debutRdvMin;
       html +=
-        '<li class="etape" draggable="true" data-i="' + i + '">' +
+        '<li class="etape' + (e.confirme ? ' confirmee' : '') + '" draggable="true" data-i="' + i + '">' +
         '<span class="poignee" title="Glisser pour déplacer" aria-hidden="true">⠿</span>' +
         '<span class="num">' + (i + 1) + '</span>' +
-        '<div class="heure"><b>' + U.fmtHeure(s.debutRdvMin) + '</b><small>RDV proposé</small></div>' +
-        '<div class="corps"><button class="lien titre" data-action="fiche" data-id="' + c.id + '">' + esc(c.raisonSociale) + '</button> ' +
-        badgeStatut(info) + (e.visiteId ? ' <span class="badge" style="--c:#15803d">CR saisi</span>' : '') +
-        '<div class="meta">' + esc(c.commune) + ' · trajet ' + U.fmtKm(s.legKm) + ' · ' + U.fmtDuree(s.legMin) + '</div></div>' +
+        '<div class="heure"><b>' + U.fmtHeure(e.confirme && e.heureConfirmee != null ? e.heureConfirmee : s.debutRdvMin) + '</b><small>' + (e.confirme ? 'RDV confirmé' : 'heure à proposer') + '</small></div>' +
+        '<div class="corps"><button class="lien titre" data-action="fiche" data-id="' + c.id + '">' + esc(c.raisonSociale) + '</button>' +
+        '<div class="meta">' + esc(c.commune) + ' · ' + esc(c.contact.prenom + ' ' + c.contact.nom) + ' · ' + telLien(c.contact.telephone) + '</div>' +
+        '<div class="meta">' + raisonsHtml(info) + ' · trajet ' + U.fmtKm(s.legKm) + ', ' + U.fmtDuree(s.legMin) + '</div>' +
+        (decale ? '<div class="alerte-ligne">L’ordre a changé : l’heure calculée est maintenant ' + U.fmtHeure(s.debutRdvMin) + '. Rappelez le client ou remettez la visite à sa place.</div>' : '') +
+        '</div>' +
         '<label class="duree" title="Durée de la visite"><input type="number" min="15" max="480" step="15" value="' + (e.dureeMin || p.dureeRdvMin) + '" data-action="duree" data-i="' + i + '"> min</label>' +
         '<div class="boutons">' +
-        '<button data-action="monter" data-i="' + i + '" title="Monter" aria-label="Monter" ' + (i === 0 ? 'disabled' : '') + '>↑</button>' +
+        '<button class="' + (e.confirme ? 'ok' : '') + '" data-action="confirmer-rdv" data-i="' + i + '">' + (e.confirme ? '✓ Confirmé' : 'Rendez-vous confirmé') + '</button>' +
+        '<span class="fleches"><button data-action="monter" data-i="' + i + '" title="Monter" aria-label="Monter" ' + (i === 0 ? 'disabled' : '') + '>↑</button>' +
         '<button data-action="descendre" data-i="' + i + '" title="Descendre" aria-label="Descendre" ' + (i === t.etapes.length - 1 ? 'disabled' : '') + '>↓</button>' +
-        '<button data-action="retirer" data-i="' + i + '" title="Retirer" aria-label="Retirer">✕</button></div></li>';
+        '<button data-action="retirer" data-i="' + i + '" title="Retirer de la tournée" aria-label="Retirer">✕</button></span></div></li>';
     }
     html += '</ol>';
 
-    // créneau prospection
     const actif = (t.prospection || []).includes(n);
     html +=
       '<label class="case"><input type="checkbox" data-action="prospection" data-jour="' + n + '" ' + (actif ? 'checked' : '') + (j.stops.length ? '' : ' disabled') +
-      '> Créneau prospection en fin de journée (' + U.fmtDuree(p.dureeProspectionMin) + ')</label>';
+      '> Ajouter un créneau prospection en fin de journée (' + U.fmtDuree(p.dureeProspectionMin) + ')</label>';
     if (actif && j.planning.prospection) {
-      const dernier = j.stops.at(-1);
-      const point = k.points[dernier.index];
-      const exclus = new Set(t.etapes.map((e) => e.compteId));
-      const candidats = [...A.der.infos.values()].filter((x) => x.compte.commercialId === t.commercialId);
-      const liste = D.prospectsProches({ point, candidats, exclus, rayonKm: p.rayonProspectionKm, today: A.today, coefRoutier: p.coefRoutier, max: 5 });
+      const point = k.points[j.stops.at(-1).index];
+      const liste = D.prospectsProches({ point, candidats: mesInfos(), exclus: new Set(t.etapes.map((e) => e.compteId)), rayonKm: p.rayonProspectionKm, today: A.today, coefRoutier: p.coefRoutier, max: 5 });
       html +=
-        '<div class="prospection"><b>Prospection ' + U.fmtHeure(j.planning.prospection.debutMin) + ' – ' + U.fmtHeure(j.planning.prospection.finMin) +
-        '</b> autour de ' + esc(point.nom) + '.' +
+        '<div class="prospection"><b>Prospection ' + U.fmtHeure(j.planning.prospection.debutMin) + ' – ' + U.fmtHeure(j.planning.prospection.finMin) + '</b> autour de ' + esc(point.nom) + '.' +
         (liste.length
           ? '<ul>' + liste.map((x) =>
-              '<li><div><button class="lien titre" data-action="fiche" data-id="' + x.info.compte.id + '">' + esc(x.info.compte.raisonSociale) + '</button> ' +
-              badgeStatut(x.info) + '<div class="meta">' + esc(x.info.compte.commune) + ' · environ ' + U.fmtKm(x.distanceKm) + ' · score ' + x.score + '</div></div>' +
-              '<button data-action="ajouter" data-id="' + x.info.compte.id + '" data-jour="' + n + '">Ajouter</button></li>').join('') + '</ul>'
+              '<li><div><button class="lien titre" data-action="fiche" data-id="' + x.info.compte.id + '">' + esc(x.info.compte.raisonSociale) + '</button>' +
+              '<div class="meta">' + esc(x.info.compte.commune) + ' · environ ' + U.fmtKm(x.distanceKm) + ' · ' + raisonsHtml(x.info) + '</div></div>' +
+              '<button data-action="ajouter-prospect" data-id="' + x.info.compte.id + '" data-jour="' + n + '">Ajouter</button></li>').join('') + '</ul>'
           : '<p class="aide">Aucun prospect à moins de ' + p.rayonProspectionKm + ' km de la dernière visite.</p>') +
         '</div>';
     }
-
-    // fin de journée
     if (j.planning.retour) {
       html += '<p class="fin-jour">Retour au domicile vers <b>' + U.fmtHeure(j.planning.retour.arriveeMin) + '</b> (' + U.fmtKm(j.planning.retour.legKm) + ', ' + U.fmtDuree(j.planning.retour.legMin) + ')</p>';
     } else if (j.stops.length) {
@@ -351,87 +606,36 @@
     return html + '</div>';
   }
 
-  function panneauAjout(t, k) {
-    const p = P();
-    const route = [k.points[0], ...t.etapes.map((_, i) => k.points[i + 1]), k.points[0]];
-    const exclus = new Set(t.etapes.map((e) => e.compteId));
-    const candidats = [...A.der.infos.values()].filter((x) => x.compte.commercialId === t.commercialId);
-    const sugg = D.suggerer({ route, candidats, exclus, rayonKm: p.rayonSuggestionKm, today: A.today, coefRoutier: p.coefRoutier }).slice(0, 12);
-    A.vue.suggestions = sugg;
-    return (
-      '<section class="panneau"><h2>Suggestions à moins de ' + p.rayonSuggestionKm + ' km du trajet</h2>' +
-      '<p class="aide">Classées par score : ancienneté de la dernière visite (jusqu’à 40), devis en cours (30), potentiel (jusqu’à 25), client à risque ou prospect chaud (10).</p>' +
-      (sugg.length
-        ? '<ul class="suggestions">' + sugg.map((s) =>
-            '<li><div><button class="lien titre" data-action="fiche" data-id="' + s.info.compte.id + '">' + esc(s.info.compte.raisonSociale) + '</button> ' +
-            badgeStatut(s.info) + ' <span class="score">' + s.score + ' pts</span>' +
-            '<div class="meta">' + esc(s.info.compte.commune) + ' · à ' + U.fmtKm(s.distanceTraceKm) + ' du trajet · détour ≈ +' + U.fmtKm(s.detourKm) + '</div>' +
-            (s.motifs.length ? '<div class="motifs">' + esc(s.motifs.join(' · ')) + '</div>' : '') + '</div>' +
-            '<button data-action="ajouter" data-id="' + s.info.compte.id + '">Ajouter</button></li>').join('') + '</ul>'
-        : '<p class="aide">Aucun compte à moins de ' + p.rayonSuggestionKm + ' km du trajet.</p>') +
-      '<h3>Ajouter un autre compte</h3>' +
-      '<input type="search" class="recherche" placeholder="Nom ou commune" data-action="recherche" value="' + esc(A.recherche) + '">' +
-      '<ul id="resultats-recherche" class="suggestions">' + resultatsRecherche(t) + '</ul></section>'
-    );
-  }
-
-  const normaliser = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-  function resultatsRecherche(t) {
-    const q = normaliser(A.recherche.trim());
-    if (q.length < 2) return '';
-    const exclus = new Set(t.etapes.map((e) => e.compteId));
-    const res = A.data.comptes
-      .filter((c) => c.commercialId === t.commercialId && !exclus.has(c.id) && normaliser(c.raisonSociale + ' ' + c.commune).includes(q))
-      .slice(0, 8);
-    if (!res.length) return '<li class="aide">Aucun compte trouvé.</li>';
-    return res
-      .map((c) => '<li><div><button class="lien titre" data-action="fiche" data-id="' + c.id + '">' + esc(c.raisonSociale) + '</button> ' + badgeStatut(A.der.infos.get(c.id)) +
-        '<div class="meta">' + esc(c.commune) + '</div></div><button data-action="ajouter" data-id="' + c.id + '">Ajouter</button></li>')
-      .join('');
-  }
-
-  function apresPlanifier() {
+  function apresEtape3() {
     const el = document.getElementById('carte-tournee');
-    if (!el) return;
+    if (!el || !A.vue.t) return;
     const map = nouvelleCarte(el);
-    const com = commercial(A.profil.commercialId);
-    const bornes = [ll(com.domicile)];
-    L.marker(ll(com.domicile), { icon: L.divIcon({ className: 'pin-domicile', html: '⌂', iconSize: [28, 28] }) })
-      .addTo(map)
-      .bindTooltip('Domicile · ' + esc(com.domicile.commune));
-    const { t, k } = A.vue;
-    if (t) {
-      k.plan.jours.forEach((j, n) => {
-        const pts = [k.points[j.planning.depuis], ...j.stops.map((s) => k.points[s.index])];
-        if (j.planning.retour) pts.push(k.points[0]);
-        L.polyline(pts.map(ll), { color: COULEURS_JOURS[n % COULEURS_JOURS.length], weight: 4, opacity: 0.85, dashArray: n % 2 ? '8 6' : null }).addTo(map);
-        j.stops.forEach((s) => {
-          const c = k.comptes[s.index - 1];
-          bornes.push(ll(c));
-          L.marker(ll(c), { icon: L.divIcon({ className: 'pin-etape', html: String(s.index), iconSize: [24, 24] }) })
-            .addTo(map)
-            .bindTooltip(U.fmtHeure(s.debutRdvMin) + ' · ' + esc(c.raisonSociale))
-            .bindPopup(popupCompte(c, false));
-        });
-      });
-      (A.vue.suggestions || []).forEach((s) => {
-        const c = s.info.compte;
-        L.circleMarker(ll(c), { radius: 6, color: '#fff', weight: 1.5, fillColor: D.STATUT_COULEUR[s.info.statut], fillOpacity: 0.95 })
+    const { k } = A.vue;
+    pinDomicile(map, k.com);
+    const bornes = [ll(k.com.domicile)];
+    k.plan.jours.forEach((j, n) => {
+      const pts = [k.points[j.planning.depuis], ...j.stops.map((s) => k.points[s.index])];
+      if (j.planning.retour) pts.push(k.points[0]);
+      L.polyline(pts.map(ll), { color: COULEURS_JOURS[n % COULEURS_JOURS.length], weight: 4, opacity: 0.85, dashArray: n % 2 ? '8 6' : null }).addTo(map);
+      j.stops.forEach((s) => {
+        const c = k.comptes[s.index - 1];
+        bornes.push(ll(c));
+        L.marker(ll(c), { icon: L.divIcon({ className: 'pin-etape', html: String(s.index), iconSize: [24, 24] }) })
           .addTo(map)
-          .bindPopup(popupCompte(c, true));
+          .bindTooltip(U.fmtHeure(s.debutRdvMin) + ' · ' + esc(c.raisonSociale))
+          .bindPopup(popupCompte(c));
       });
-    }
+    });
     if (bornes.length > 1) map.fitBounds(bornes, { padding: [30, 30] });
-    else map.setView(bornes[0], 10);
+    else map.setView(bornes[0], 9);
   }
 
   // ================================================================== MA TOURNÉE (mobile)
   function vueMaTournee() {
-    const com = commercial(A.profil.commercialId);
-    const tours = tourneesAVenir(com.id);
-    if (!tours.length) return '<section class="panneau vide">Aucune tournée prévue. Préparez-la dans « Planifier ».</section>';
+    const tours = tourneesAVenir(A.profil.commercialId);
+    if (!tours.length) return '<section class="panneau vide">Aucune tournée prévue. Préparez-la dans « Préparer ».</section>';
     const auj = U.isoDay(A.today);
-    let x = tours.find((y) => y.t.id === A.maTourneeId) || tours.find((y) => y.k.dates.includes(auj)) || tours[0];
+    const x = tours.find((y) => y.t.id === A.maTourneeId) || tours.find((y) => y.k.dates.includes(auj)) || tours[0];
     A.maTourneeId = x.t.id;
     const { t, k } = x;
     if (A.maJourPour !== t.id) {
@@ -461,15 +665,15 @@
       const c = compte(e.compteId);
       const info = A.der.infos.get(c.id);
       const v = e.visiteId ? A.data.visites.find((y) => y.id === e.visiteId) : null;
+      const heure = e.confirme && e.heureConfirmee != null ? e.heureConfirmee : s.debutRdvMin;
       if (s.pauseAvantMin) html += '<li class="pause">Pause déjeuner ' + U.fmtHeure(s.arriveeMin) + ' – ' + U.fmtHeure(s.arriveeMin + s.pauseAvantMin) + '</li>';
       html +=
         '<li class="visite' + (v ? ' faite' : '') + '">' +
-        '<div class="ligne1"><span class="heure">' + U.fmtHeure(s.debutRdvMin) + '</span><span>' + badgeStatut(info) + '</span></div>' +
+        '<div class="ligne1"><span class="heure">' + U.fmtHeure(heure) + '</span><span>' + (e.confirme ? '<span class="badge" style="--c:#15803d">RDV confirmé</span> ' : '') + badgeStatut(info) + '</span></div>' +
         '<h3><button class="lien titre" data-action="fiche" data-id="' + c.id + '">' + esc(c.raisonSociale) + '</button></h3>' +
         '<p>' + esc(c.adresse) + ', ' + esc(c.codePostal) + ' ' + esc(c.commune) + '</p>' +
         '<p>' + esc(c.contact.prenom + ' ' + c.contact.nom) + ' (' + esc(c.contact.fonction) + ') · ' + telLien(c.contact.telephone) + '</p>' +
-        '<p class="meta">Dernière visite : ' + U.fmtAnciennete(info.derniereVisite, A.today) +
-        (c.prochaineAction ? ' · À faire : ' + esc(c.prochaineAction.libelle) : '') + '</p>' +
+        '<p class="meta">' + raisonsHtml(info) + (c.prochaineAction ? ' · À faire : ' + esc(c.prochaineAction.libelle) : '') + '</p>' +
         (v
           ? '<p class="cr-ok">✓ Compte-rendu enregistré : ' + D.RESULTAT_LABEL[v.resultat] + '</p><button data-action="cr-ouvrir" data-i="' + i + '">Modifier le compte-rendu</button>'
           : '<button class="primaire large" data-action="cr-ouvrir" data-i="' + i + '">Compte-rendu</button>') +
@@ -493,11 +697,11 @@
       '<fieldset><legend>Résultat</legend><div class="resultats">' +
       D.RESULTATS.map((r) => '<button type="button" class="res-' + r + (A.cr.resultat === r ? ' actif' : '') + '" data-action="cr-resultat" data-v="' + r + '">' + D.RESULTAT_LABEL[r] + '</button>').join('') +
       '</div></fieldset>' +
-      '<label>Prochaine action <input name="action" value="' + esc(v && v.prochaineAction ? v.prochaineAction : '') + '"></label>' +
+      '<label>Prochaine action <input name="action" id="cr-action" value="' + esc(v && v.prochaineAction ? v.prochaineAction : '') + '"></label>' +
       '<div class="puces">' + actions.map((a) => '<button type="button" data-action="cr-puce-action" data-v="' + esc(a) + '">' + esc(a) + '</button>').join('') + '</div>' +
-      '<label>Date de relance <input type="date" name="relance" value="' + esc(v && v.dateRelance ? v.dateRelance : '') + '"></label>' +
+      '<label>Date de relance <input type="date" name="relance" id="cr-relance" value="' + esc(v && v.dateRelance ? v.dateRelance : '') + '"></label>' +
       '<div class="puces">' + relances.map((r) => '<button type="button" data-action="cr-puce-relance" data-v="' + U.isoDay(U.addDays(A.today, r[1])) + '">' + r[0] + '</button>').join('') + '</div>' +
-      '<label>Note <textarea name="note" rows="3">' + esc(v && v.note ? v.note : '') + '</textarea></label>' +
+      '<label>Note <textarea name="note" id="cr-note" rows="3">' + esc(v && v.note ? v.note : '') + '</textarea></label>' +
       '<p class="aide">Enregistré sur cet appareil, même sans réseau.</p>' +
       '<div class="actions"><button type="submit" class="primaire">Enregistrer</button><button type="button" data-action="cr-fermer">Annuler</button></div>' +
       '</form>'
@@ -524,22 +728,15 @@
     const action = form.elements.action.value.trim();
     const relance = form.elements.relance.value;
     const note = form.elements.note.value.trim();
-    const v = {
-      id: e.visiteId || U.uid('v'),
-      compteId: c.id,
-      commercialId: t.commercialId,
-      debut: date + 'T' + U.minToHhmm(s ? s.debutRdvMin : 540) + ':00',
-      dureeMin: e.dureeMin || P().dureeRdvMin,
-      resultat: A.cr.resultat,
-      tourneeId: t.id,
-    };
+    const heure = e.confirme && e.heureConfirmee != null ? e.heureConfirmee : s ? s.debutRdvMin : 540;
+    const v = { id: e.visiteId || U.uid('v'), compteId: c.id, commercialId: t.commercialId, debut: date + 'T' + U.minToHhmm(heure) + ':00', dureeMin: e.dureeMin || P().dureeRdvMin, resultat: A.cr.resultat, tourneeId: t.id };
     if (action) v.prochaineAction = action;
     if (relance) v.dateRelance = relance;
     if (note) v.note = note;
     TC.dataService.saveVisite(v);
     A.data.visites = A.data.visites.filter((x) => x.id !== v.id).concat(v);
     e.visiteId = v.id;
-    TC.dataService.saveTournee(t);
+    enregistrerTournee(t);
     if (action) {
       const c2 = Object.assign({}, c, { prochaineAction: { libelle: action, date: relance || U.isoDay(U.addDays(A.today, 14)) } });
       TC.dataService.saveCompte(c2);
@@ -551,97 +748,74 @@
     toast('Compte-rendu enregistré');
   }
 
-  // ================================================================== CARTE
-  function filtresDefaut() {
-    return { statuts: new Set(D.STATUTS), importants: false, potentiels: new Set(['A', 'B', 'C']), perimetre: A.profil.kind === 'manager' ? 'tous' : A.profil.commercialId };
-  }
-  function comptesFiltres() {
-    const f = A.filtres;
-    return [...A.der.infos.values()].filter((i) => {
-      const c = i.compte;
-      if (f.perimetre !== 'tous' && c.commercialId !== f.perimetre) return false;
-      if (!f.statuts.has(i.statut)) return false;
-      if (f.importants && !i.important) return false;
-      if (!f.potentiels.has(c.potentiel)) return false;
-      if (c.etape === 'perdu') return false;
-      return true;
-    });
-  }
-  function vueCarte() {
-    if (!A.filtres) A.filtres = filtresDefaut();
-    const f = A.filtres;
-    const options = [['tous', 'Toute la France']].concat(A.data.commerciaux.map((c) => [c.id, c.prenom + ' ' + c.nom + ' · ' + secteur(c.secteurId).nom]));
+  // ================================================================== PILOTAGE (direction)
+  function vuePilotage() {
+    const f = A.pilotage;
+    const r = D.pilotage({ data: A.data, der: A.der, today: A.today, periodeJours: f.periodeJours, secteurId: f.secteurId, activite: f.activite });
+    A.vue.pilotage = r;
+    const p = P();
+    const s = r.synthese;
+    const tuile = (val, lib, extra) => '<div class="tuile' + (extra || '') + '"><b>' + val + '</b><span>' + lib + '</span></div>';
+    const totalAct = Object.values(r.parActivite).reduce((x, y) => x + y, 0) || 1;
+    const maxAct = Math.max(1, ...Object.values(r.parActivite));
     return (
-      '<div class="grille-carte"><aside class="panneau filtres"><h2>Filtres</h2>' +
-      '<label>Périmètre <select data-action="filtre-perimetre">' + options.map((o) => '<option value="' + o[0] + '"' + (f.perimetre === o[0] ? ' selected' : '') + '>' + esc(o[1]) + '</option>').join('') + '</select></label>' +
-      '<fieldset><legend>Statut</legend>' + D.STATUTS.map((s) =>
-        '<label class="case"><input type="checkbox" data-action="filtre-statut" value="' + s + '"' + (f.statuts.has(s) ? ' checked' : '') + '> <span class="pastille" style="--c:' + D.STATUT_COULEUR[s] + '"></span>' + D.STATUT_LABEL[s] + '</label>').join('') + '</fieldset>' +
-      '<fieldset><legend>Potentiel</legend>' + ['A', 'B', 'C'].map((p) =>
-        '<label class="case"><input type="checkbox" data-action="filtre-potentiel" value="' + p + '"' + (f.potentiels.has(p) ? ' checked' : '') + '> ' + D.POTENTIEL_LABEL[p] + '</label>').join('') + '</fieldset>' +
-      '<label class="case"><input type="checkbox" data-action="filtre-importants"' + (f.importants ? ' checked' : '') + '> Comptes importants uniquement</label>' +
-      '<p class="compteur" id="compteur-carte"></p>' +
-      '<p class="aide">Cercle plus grand cerclé de noir : compte important. Positions au centre de la commune.</p>' +
-      '</aside><div id="carte-comptes" class="carte-map grande"></div></div>'
+      '<div class="pilotage"><section class="panneau filtres-ligne">' +
+      '<label>Période <select data-action="pil-periode">' + [[28, '4 dernières semaines'], [91, '3 derniers mois'], [365, '12 derniers mois']].map(([v, l]) =>
+        '<option value="' + v + '"' + (f.periodeJours === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></label>' +
+      '<label>Secteur <select data-action="pil-secteur"><option value="tous">Tous les secteurs</option>' + A.data.secteurs.map((x) =>
+        '<option value="' + x.id + '"' + (f.secteurId === x.id ? ' selected' : '') + '>' + esc(x.nom) + '</option>').join('') + '</select></label>' +
+      '<label>Activité <select data-action="pil-activite"><option value="toutes">Toutes</option>' + D.ACTIVITES.map((a) =>
+        '<option value="' + a + '"' + (f.activite === a ? ' selected' : '') + '>' + D.ACTIVITE_LABEL[a] + '</option>').join('') + '</select></label>' +
+      '</section>' +
+      '<div class="tuiles">' +
+      tuile(U.fmtNombre(s.visites), 'visites réalisées') +
+      tuile(s.visitesSemaineParCommercial.toFixed(1).replace('.', ','), 'visites par semaine et par commercial (objectif ' + p.objectifVisitesSemaine + ')', s.visitesSemaineParCommercial < p.objectifVisitesSemaine ? ' alerte' : '') +
+      tuile(U.fmtNombre(s.kmParVisite), 'km par visite (estimés)') +
+      tuile(U.fmtNombre(s.devis), 'devis demandés') +
+      tuile(U.fmtNombre(s.commandes), 'commandes') +
+      tuile(pct(s.partCompteRendu), 'visites avec compte-rendu') +
+      '</div>' +
+      '<section class="panneau"><h2>Par commercial</h2><div class="tableau-defilant"><table class="equipe"><thead><tr>' +
+      '<th>Commercial</th><th class="nombre">Visites / semaine</th><th class="nombre">Km / visite</th><th class="nombre">Clients A et B vus dans leur fréquence</th>' +
+      '<th class="nombre">Clients à risque sans visite prévue</th><th class="nombre">Visites avec compte-rendu</th><th class="nombre">Devis demandés</th><th class="nombre">Commandes</th>' +
+      '</tr></thead><tbody>' + r.lignes.map((l) =>
+        '<tr><td><b>' + esc(l.commercial.prenom + ' ' + l.commercial.nom) + '</b><div class="meta">' + esc(secteur(l.commercial.secteurId).nom) + '</div></td>' +
+        '<td class="nombre">' + (l.alerteVisites ? '<span class="badge" style="--c:#b91c1c">' : '<span>') + l.visitesSemaine.toFixed(1).replace('.', ',') + '</span></td>' +
+        '<td class="nombre">' + U.fmtNombre(l.kmParVisite) + '</td>' +
+        '<td class="nombre">' + pct(l.partABDansFrequence) + '</td>' +
+        '<td class="nombre">' + (l.risquesSansVisitePrevue ? '<b>' + l.risquesSansVisitePrevue + '</b>' : '0') + '</td>' +
+        '<td class="nombre">' + pct(l.partCompteRendu) + '</td>' +
+        '<td class="nombre">' + l.devis + '</td><td class="nombre">' + l.commandes + '</td></tr>').join('') +
+      '</tbody></table></div><p class="aide">En rouge : moins de ' + p.objectifVisitesSemaine + ' visites par semaine. Données issues uniquement des visites déclarées et des tournées prévues ; kilomètres estimés à vol d’oiseau corrigé.</p></section>' +
+      '<div class="grille-pilotage"><section class="panneau"><h2>Visites par activité</h2><ul class="jauges">' +
+      D.ACTIVITES.map((a) =>
+        '<li><span class="jauge-lib">' + D.ACTIVITE_LABEL[a] + '</span><span class="jauge"><span style="width:' + Math.round((r.parActivite[a] / maxAct) * 100) + '%"></span></span>' +
+        '<span class="jauge-val">' + r.parActivite[a] + ' <span class="meta">(' + pct(r.parActivite[a] / totalAct) + ')</span></span></li>').join('') +
+      '</ul><p class="aide">Une visite compte pour chaque activité du compte visité.</p></section>' +
+      '<section class="panneau"><h2>Part des comptes à voir par secteur</h2><div id="carte-secteurs" class="carte-map"></div>' +
+      '<p class="aide">Comptes en retard sur leur fréquence, à risque, avec un devis en attente ou prospects chauds.</p></section></div></div>'
     );
   }
-  function apresCarte() {
-    const map = nouvelleCarte(document.getElementById('carte-comptes'));
-    A.coucheComptes = L.layerGroup().addTo(map);
-    dessinerComptes(true);
-  }
-  function dessinerComptes(cadrer) {
-    const map = A.cartes[0];
-    A.coucheComptes.clearLayers();
-    const liste = comptesFiltres();
+  function apresPilotage() {
+    const el = document.getElementById('carte-secteurs');
+    if (!el) return;
+    const map = nouvelleCarte(el);
     const bornes = [];
-    for (const i of liste) {
-      const c = i.compte;
-      L.circleMarker(ll(c), {
-        radius: i.important ? 8 : 5.5,
-        color: i.important ? '#0f172a' : '#ffffff',
-        weight: i.important ? 2 : 1,
-        fillColor: D.STATUT_COULEUR[i.statut],
-        fillOpacity: 0.9,
-      }).bindPopup(popupCompte(c, false)).addTo(A.coucheComptes);
-      bornes.push(ll(c));
+    for (const s of A.vue.pilotage.parSecteur) {
+      if (!s.comptes) continue;
+      bornes.push([s.lat, s.lng]);
+      const choisi = A.pilotage.secteurId === s.secteur.id;
+      L.marker([s.lat, s.lng], {
+        icon: L.divIcon({ className: 'pin-dep' + (choisi ? ' choisi' : ''), html: '<span style="--fond:' + couleurCharge(s.partAVoir / 0.8) + '"><b>' + pct(s.partAVoir) + '</b><small>' + s.secteur.id + '</small></span>', iconSize: [54, 54] }),
+      })
+        .addTo(map)
+        .bindTooltip(esc(s.secteur.nom) + ' : ' + s.aVoir + ' comptes à voir sur ' + s.comptes);
     }
-    if (A.filtres.perimetre !== 'tous') {
-      const com = commercial(A.filtres.perimetre);
-      L.marker(ll(com.domicile), { icon: L.divIcon({ className: 'pin-domicile', html: '⌂', iconSize: [28, 28] }) }).bindTooltip('Domicile de ' + esc(com.prenom + ' ' + com.nom)).addTo(A.coucheComptes);
-    }
-    document.getElementById('compteur-carte').textContent = liste.length + ' compte' + (liste.length > 1 ? 's' : '') + ' affiché' + (liste.length > 1 ? 's' : '');
-    if (cadrer) {
-      if (bornes.length) map.fitBounds(bornes, { padding: [20, 20] });
-      else map.setView([46.6, 2.4], 6);
-    }
+    if (bornes.length) map.fitBounds(bornes, { padding: [40, 40] });
+    else map.setView([46.6, 2.4], 5);
   }
 
-  // ================================================================== ÉQUIPE (manager)
-  function vueEquipe() {
-    const depuis = U.isoDay(U.addDays(A.today, -28));
-    const lignes = A.data.commerciaux.map((com) => {
-      const tours = tourneesAVenir(com.id);
-      const prevues = tours.reduce((s, x) => s + x.k.plan.nbVisites, 0);
-      const realisees = A.data.visites.filter((v) => v.commercialId === com.id && v.debut >= depuis && v.debut.slice(0, 10) <= U.isoDay(A.today)).length;
-      const chips = tours.map((x) => {
-        const n = x.k.plan.jours.length;
-        return '<span class="puce-tournee">' + esc(U.fmtDateCourte(x.t.date)) + (n > 1 ? ' · ' + n + ' j' : '') + ' · ' + U.nb(x.k.plan.nbVisites, 'visite') + ' · ' + U.fmtKm(x.k.plan.totalKm) + '</span>';
-      }).join(' ');
-      return (
-        '<tr><td><b>' + esc(com.prenom + ' ' + com.nom) + '</b><div class="meta">' + esc(secteur(com.secteurId).nom) + '</div></td>' +
-        '<td>' + (chips || '<span class="aide">Aucune</span>') + '</td>' +
-        '<td class="nombre">' + prevues + '</td><td class="nombre">' + realisees + '</td></tr>'
-      );
-    });
-    return (
-      '<section class="panneau"><h2>Tournées prévues par commercial</h2>' +
-      '<div class="tableau-defilant"><table class="equipe"><thead><tr><th>Commercial</th><th>Tournées prévues</th><th class="nombre">Visites prévues</th><th class="nombre">Visites réalisées (4 sem.)</th></tr></thead>' +
-      '<tbody>' + lignes.join('') + '</tbody></table></div>' +
-      '<p class="estimation">Kilomètres estimés (' + esc(R.getProvider().label) + ').</p></section>'
-    );
-  }
-
-  // ================================================================== PARAMÈTRES
+  // ================================================================== PARAMÈTRES (direction)
   const CHAMPS = [
     ['Journée type', [
       ['heureDepart', 'Heure de départ', 'time'],
@@ -652,14 +826,17 @@
       ['heureLimiteRetour', 'Heure limite de retour (alerte)', 'time'],
       ['tempsLibreMin', 'Temps libre réservé par jour (min)', 'number', 5],
     ]],
+    ['Fréquence de visite', [
+      ['frequenceAJours', 'Clients A : au moins une visite tous les (jours)', 'number', 1],
+      ['frequenceBJours', 'Clients B : au moins une visite tous les (jours)', 'number', 1],
+      ['frequenceCJours', 'Clients C : au moins une visite tous les (jours)', 'number', 1],
+      ['objectifVisitesSemaine', 'Objectif de visites par semaine et par commercial', 'number', 1],
+    ]],
     ['Trajets', [
       ['margeTrajetPct', 'Marge sur les temps de trajet (%)', 'number', 1],
       ['coefRoutier', 'Coefficient routier (× vol d’oiseau)', 'number', 0.05],
       ['vitesseMoyenneKmh', 'Vitesse moyenne (km/h)', 'number', 1],
       ['seuilAllerMultiJoursMin', 'Proposer plusieurs jours au-delà de (min de route aller)', 'number', 5],
-    ]],
-    ['Suggestions et prospection', [
-      ['rayonSuggestionKm', 'Rayon des suggestions autour du trajet (km)', 'number', 1],
       ['dureeProspectionMin', 'Durée du créneau prospection (min)', 'number', 5],
       ['rayonProspectionKm', 'Rayon de recherche des prospects (km)', 'number', 1],
     ]],
@@ -678,8 +855,8 @@
       CHAMPS.map(([titre, champs]) =>
         '<section class="panneau"><h2>' + titre + '</h2>' + champs.map(([cle, lib, type, pas]) =>
           type === 'checkbox'
-            ? '<label class="case"><input type="checkbox" data-param="' + cle + '"' + (p[cle] ? ' checked' : '') + '> ' + lib + '</label>'
-            : '<label class="param">' + lib + ' <input type="' + type + '" data-param="' + cle + '" value="' + esc(p[cle]) + '"' + (pas ? ' step="' + pas + '" min="0"' : '') + '></label>').join('') +
+            ? '<label class="case"><input type="checkbox" id="param-' + cle + '" data-param="' + cle + '"' + (p[cle] ? ' checked' : '') + '> ' + lib + '</label>'
+            : '<label class="param">' + lib + ' <input type="' + type + '" id="param-' + cle + '" data-param="' + cle + '" value="' + esc(p[cle]) + '"' + (pas ? ' step="' + pas + '" min="0"' : '') + '></label>').join('') +
         '</section>').join('') +
       '<section class="panneau"><h2>Données de démonstration</h2><p class="aide">Données fictives générées le ' + U.fmtDate(A.data.dateDonnees) +
       '. Les modifications sont stockées dans ce navigateur uniquement.</p>' +
@@ -710,34 +887,33 @@
     const ech = A.data.echanges.filter((e) => e.compteId === c.id).sort((a, b) => b.date.localeCompare(a.date));
     const dv = A.data.devis.filter((d) => d.compteId === c.id).sort((a, b) => b.date.localeCompare(a.date));
     const com = commercial(c.commercialId);
-    const t = A.route === 'planifier' && A.tourneeId ? tournee(A.tourneeId) : null;
-    const peutAjouter = t && t.commercialId === c.commercialId && !t.etapes.some((e) => e.compteId === c.id);
+    const freq = c.nature === 'client' ? D.frequenceJours(c, P()) : null;
     let html =
       '<div class="modale-fond" data-action="fermer-fiche"></div><div class="modale" role="dialog" aria-modal="true" aria-label="Fiche compte">' +
       '<div class="titre-ligne"><h2>' + esc(c.raisonSociale) + '</h2><button class="fermer" data-action="fermer-fiche" aria-label="Fermer">✕</button></div>' +
       '<p>' + badgeStatut(info) + ' <span class="badge" style="--c:#475569">' + (c.nature === 'client' ? 'Client' : 'Prospect') + ' · ' + D.TYPE_LABEL[c.type] + '</span>' +
       ' <span class="badge" style="--c:#475569">Potentiel ' + D.POTENTIEL_LABEL[c.potentiel] + '</span></p>' +
+      '<p><b>Activités :</b> ' + esc((c.activites || []).map((a) => D.ACTIVITE_LABEL[a]).join(', ')) + '</p>' +
+      '<p><b>À voir :</b> ' + raisonsHtml(info) + '</p>' +
       '<div class="fiche-grille"><div><h3>Contact</h3><p>' + esc(c.contact.prenom + ' ' + c.contact.nom) + ' · ' + esc(c.contact.fonction) + '<br>' +
       telLien(c.contact.telephone) + '<br><a href="mailto:' + esc(c.contact.email) + '">' + esc(c.contact.email) + '</a></p>' +
       '<p>' + esc(c.adresse) + '<br>' + esc(c.codePostal + ' ' + c.commune) + '</p>' +
       '<p class="meta">Suivi par ' + esc(com.prenom + ' ' + com.nom) + '</p></div>' +
       '<div><h3>Suivi</h3><p>Dernière visite : <b>' + U.fmtAnciennete(info.derniereVisite, A.today) + '</b>' + (info.derniereVisite ? ' (' + U.fmtDate(info.derniereVisite) + ')' : '') + '</p>' +
+      (freq ? '<p>Fréquence attendue : une visite tous les ' + D.dureeEnClair(freq) + '</p>' : '') +
       '<p>Prochaine action : ' + (c.prochaineAction ? '<b>' + esc(c.prochaineAction.libelle) + '</b> · ' + U.fmtDate(c.prochaineAction.date) : '—') + '</p>';
     if (c.nature === 'client') {
       html +=
         '<p>CA 12 mois : <b>' + U.fmtEuro(info.ca12m) + '</b><br><span class="meta">6 derniers mois ' + U.fmtEuro(info.ca6m) + ' · 6 mois précédents ' + U.fmtEuro(info.caPrec6m) + '</span></p>' +
-        '<label class="case"><input type="checkbox" data-action="fiche-important"' + (c.important ? ' checked' : '') + '> Marquer comme compte important</label>';
+        '<label class="case"><input type="checkbox" data-action="fiche-important"' + (c.important ? ' checked' : '') + '> Compte important</label>';
     } else {
-      html +=
-        '<label class="param">Étape <select data-action="fiche-etape">' + D.ETAPES.map((e) => '<option value="' + e + '"' + (c.etape === e ? ' selected' : '') + '>' + D.ETAPE_LABEL[e] + '</option>').join('') + '</select></label>' +
-        '<p>Score : <b>' + (c.score || 0) + '/100</b></p>';
+      html += '<label class="param">Étape <select data-action="fiche-etape">' + D.ETAPES.map((e) => '<option value="' + e + '"' + (c.etape === e ? ' selected' : '') + '>' + D.ETAPE_LABEL[e] + '</option>').join('') + '</select></label>';
     }
     html += '</div></div>';
-    if (peutAjouter) html += '<p><button class="primaire" data-action="ajouter" data-id="' + c.id + '">Ajouter à la tournée du ' + esc(U.fmtDateCourte(t.date)) + '</button></p>';
     html += '<h3>Devis</h3>' + (dv.length ? '<ul class="historique">' + dv.map((d) =>
       '<li><b>' + U.fmtDate(d.date) + '</b> · ' + esc(d.objet) + ' · ' + U.fmtEuro(d.montantHT) + ' HT · ' + D.STATUT_DEVIS_LABEL[d.statut] + '</li>').join('') + '</ul>' : '<p class="aide">Aucun devis.</p>');
     html += '<h3>Visites (' + vs.length + ')</h3>' + (vs.length ? '<ul class="historique">' + vs.slice(0, 12).map((v) =>
-      '<li><b>' + U.fmtDate(v.debut) + '</b> · ' + D.RESULTAT_LABEL[v.resultat] + (v.note ? ' · ' + esc(v.note) : '') + (v.prochaineAction ? ' <span class="meta">→ ' + esc(v.prochaineAction) + '</span>' : '') + '</li>').join('') + '</ul>' : '<p class="aide">Aucune visite.</p>');
+      '<li><b>' + U.fmtDate(v.debut) + '</b> · ' + (v.resultat ? D.RESULTAT_LABEL[v.resultat] : '<i>sans compte-rendu</i>') + (v.note ? ' · ' + esc(v.note) : '') + (v.prochaineAction ? ' <span class="meta">→ ' + esc(v.prochaineAction) + '</span>' : '') + '</li>').join('') + '</ul>' : '<p class="aide">Aucune visite.</p>');
     html += '<h3>Échanges</h3>' + (ech.length ? '<ul class="historique">' + ech.map((e) =>
       '<li><b>' + U.fmtDate(e.date) + '</b> · ' + D.CANAL_LABEL[e.canal] + ' · ' + esc(e.resume) + '</li>').join('') + '</ul>' : '<p class="aide">Aucun échange enregistré.</p>');
     return html + '</div>';
@@ -753,38 +929,43 @@
   // ================================================================== RENDU ET NAVIGATION
   function routes() {
     return A.profil.kind === 'manager'
-      ? [['equipe', 'Équipe'], ['carte', 'Carte'], ['parametres', 'Paramètres']]
-      : [['planifier', 'Planifier'], ['tournee', 'Ma tournée'], ['carte', 'Carte'], ['parametres', 'Paramètres']];
+      ? [['pilotage', 'Pilotage'], ['parametres', 'Paramètres']]
+      : [['preparer', 'Préparer'], ['tournee', 'Ma tournée']];
   }
   function routeCourante() {
     const r = location.hash.replace(/^#\/?/, '');
     const ok = routes().map((x) => x[0]);
     return ok.includes(r) ? r : ok[0];
   }
-
   function enTete() {
     const opts = A.data.commerciaux.map((c) =>
       '<option value="c:' + c.id + '"' + (A.profil.kind === 'commercial' && A.profil.commercialId === c.id ? ' selected' : '') + '>' +
-      esc(c.prenom + ' ' + c.nom + ' · ' + secteur(c.secteurId).nom) + '</option>').join('');
+      esc(c.prenom + ' ' + c.nom + ' · ' + c.secteurId) + '</option>').join('');
     document.getElementById('profil').innerHTML =
-      '<optgroup label="Commerciaux">' + opts + '</optgroup><option value="manager"' + (A.profil.kind === 'manager' ? ' selected' : '') + '>Direction commerciale (manager)</option>';
+      '<optgroup label="Commerciaux">' + opts + '</optgroup><option value="manager"' + (A.profil.kind === 'manager' ? ' selected' : '') + '>Direction commerciale</option>';
     document.getElementById('nav').innerHTML = routes()
       .map((r) => '<a href="#' + r[0] + '"' + (r[0] === A.route ? ' class="actif" aria-current="page"' : '') + '>' + r[1] + '</a>')
       .join('');
   }
-
   function render() {
     A.route = routeCourante();
+    A.vue = {};
     detruireCartes();
     enTete();
     const main = document.getElementById('vue');
     const scroll = window.scrollY;
-    const vues = { planifier: vuePlanifier, tournee: vueMaTournee, carte: vueCarte, equipe: vueEquipe, parametres: vueParametres };
+    const vues = { preparer: vuePreparer, tournee: vueMaTournee, pilotage: vuePilotage, parametres: vueParametres };
     main.innerHTML = vues[A.route]();
-    if (A.route === 'planifier') apresPlanifier();
-    if (A.route === 'carte') apresCarte();
+    if (A.route === 'preparer' && A.prep && A.prep.etape === 1) apresEtape1();
+    if (A.route === 'preparer' && A.prep && A.prep.etape === 3) apresEtape3();
+    if (A.route === 'pilotage') apresPilotage();
     document.getElementById('fiche').innerHTML = A.ficheId ? ficheHtml() : '';
     window.scrollTo(0, scroll);
+  }
+  function allerEtape(n) {
+    A.prep.etape = n;
+    render();
+    window.scrollTo(0, 0);
   }
 
   // ------------------------------------------------------------------ événements
@@ -811,40 +992,70 @@
     const el = ev.target.closest('[data-action]');
     if (!el) return;
     const a = el.dataset.action;
-    const t = A.tourneeId ? tournee(A.tourneeId) : null;
+    const t = A.prep && A.prep.tourneeId ? tournee(A.prep.tourneeId) : null;
     const i = el.dataset.i != null ? Number(el.dataset.i) : null;
     switch (a) {
-      case 'choisir-tournee':
-        A.tourneeId = el.dataset.id;
-        A.recherche = '';
+      case 'prep-nouvelle':
+        A.prep = nouvellePrep();
         render();
         break;
-      case 'nouvelle-tournee': {
-        const date = U.isoDay(U.prochainJourTournee(A.today, false));
-        const nt = { id: U.uid('t'), commercialId: A.profil.commercialId, date, multiJours: false, decoupageRefuse: false, prospection: [], etapes: [], creeLe: U.isoDateTime(new Date()), modifieeLe: U.isoDateTime(new Date()) };
-        A.data.tournees.push(nt);
-        A.tourneeId = nt.id;
-        TC.dataService.saveTournee(nt);
+      case 'prep-ouvrir':
+        ouvrirTournee(tournee(el.dataset.id));
         render();
-        toast('Nouvelle tournée le ' + U.fmtDateCourte(date));
+        break;
+      case 'prep-quitter':
+        A.prep = null;
+        render();
+        break;
+      case 'prep-retour':
+        if (A.prep.etape === 3 && t) A.prep.selection = new Set(t.etapes.map((e) => e.compteId));
+        allerEtape(A.prep.etape - 1);
+        break;
+      case 'prep-suivant':
+        if (A.prep.etape === 1 && !A.prep.departements.size) break;
+        if (A.prep.etape === 2) {
+          if (!A.prep.selection.size) break;
+          creerOuMajTournee();
+        }
+        allerEtape(A.prep.etape + 1);
+        break;
+      case 'prep-preselection':
+        preselectionner();
+        render();
+        break;
+      case 'prep-vider':
+        A.prep.selection = new Set();
+        render();
+        break;
+      case 'confirmer-rdv': {
+        const k = calc(t);
+        let heure = null;
+        k.plan.jours.forEach((j) => j.planning.stops.forEach((s) => {
+          if (s.index === i + 1) heure = s.debutRdvMin;
+        }));
+        majTournee(t, (x) => {
+          const e = x.etapes[i];
+          e.confirme = !e.confirme;
+          e.heureConfirmee = e.confirme ? heure : null;
+        });
         break;
       }
       case 'supprimer-tournee':
         if (t && confirmer(el, 'Confirmer la suppression')) {
           TC.dataService.deleteTournee(t.id);
           A.data.tournees = A.data.tournees.filter((x) => x.id !== t.id);
-          A.tourneeId = null;
+          A.prep = null;
           render();
+          toast('Tournée supprimée');
         }
         break;
       case 'optimiser':
         if (t) {
-          const k = calc(t);
-          const ordre = R.optimizeOrder(k.m.km);
+          const ordre = R.optimizeOrder(calc(t).m.km);
           majTournee(t, (x) => {
             x.etapes = ordre.map((n) => x.etapes[n - 1]);
           });
-          toast('Ordre optimisé');
+          toast('Meilleur ordre recalculé');
         }
         break;
       case 'monter':
@@ -855,11 +1066,16 @@
         break;
       case 'retirer':
         majTournee(t, (x) => x.etapes.splice(i, 1));
+        A.prep.selection = new Set(t.etapes.map((e) => e.compteId));
         break;
-      case 'ajouter': {
-        const cible = A.route === 'planifier' ? t : null;
-        if (!cible) break;
-        ajouterEtape(cible, el.dataset.id, el.dataset.jour != null ? Number(el.dataset.jour) : null);
+      case 'ajouter-prospect': {
+        const k = calc(t);
+        const jour = Number(el.dataset.jour);
+        majTournee(t, (x) => {
+          x.etapes.splice(k.plan.jours[jour].stops.at(-1).index, 0, { compteId: el.dataset.id, confirme: false });
+        });
+        A.prep.selection.add(el.dataset.id);
+        toast('Prospect ajouté à la tournée');
         break;
       }
       case 'accepter-decoupage':
@@ -869,14 +1085,10 @@
         });
         break;
       case 'refuser-decoupage':
-        majTournee(t, (x) => {
-          x.decoupageRefuse = true;
-        });
+        majTournee(t, (x) => (x.decoupageRefuse = true));
         break;
       case 'revoir-decoupage':
-        majTournee(t, (x) => {
-          x.decoupageRefuse = false;
-        });
+        majTournee(t, (x) => (x.decoupageRefuse = false));
         break;
       case 'un-jour':
         majTournee(t, (x) => {
@@ -920,14 +1132,13 @@
         if (confirmer(el, 'Confirmer : tout effacer et régénérer')) {
           A.data = TC.dataService.reset();
           indexer();
-          A.tourneeId = A.maTourneeId = A.ficheId = null;
-          A.filtres = null;
+          A.prep = null;
+          A.maTourneeId = A.ficheId = null;
           render();
           toast('Données réinitialisées');
         }
         break;
       default:
-        return;
     }
   }
 
@@ -936,10 +1147,9 @@
     if (el.id === 'profil') {
       A.profil = el.value === 'manager' ? { kind: 'manager' } : { kind: 'commercial', commercialId: el.value.slice(2) };
       ecrireProfil();
-      A.tourneeId = A.maTourneeId = A.ficheId = null;
-      A.filtres = null;
-      A.crOuvert = null;
-      location.hash = '#/' + routes()[0][0];
+      A.prep = null;
+      A.maTourneeId = A.ficheId = A.crOuvert = null;
+      history.replaceState(null, '', '#' + routes()[0][0]);
       render();
       return;
     }
@@ -948,14 +1158,43 @@
       return;
     }
     const a = el.dataset.action;
-    const t = A.tourneeId ? tournee(A.tourneeId) : null;
+    const t = A.prep && A.prep.tourneeId ? tournee(A.prep.tourneeId) : null;
     switch (a) {
+      case 'prep-dep':
+        el.checked ? A.prep.departements.add(el.value) : A.prep.departements.delete(el.value);
+        render();
+        break;
+      case 'prep-date':
+        if (el.value) {
+          A.prep.date = el.value;
+          render();
+        }
+        break;
+      case 'prep-compte':
+        el.checked ? A.prep.selection.add(el.value) : A.prep.selection.delete(el.value);
+        render();
+        break;
+      case 'prep-activite':
+        A.prep.activite = el.value;
+        render();
+        break;
+      case 'prep-type':
+        A.prep.type = el.value;
+        render();
+        break;
+      case 'prep-a-voir':
+        A.prep.aVoirSeulement = el.checked;
+        render();
+        break;
       case 'date-tournee':
-        if (el.value) majTournee(t, (x) => (x.date = el.value));
+        if (el.value && t) {
+          A.prep.date = el.value;
+          majTournee(t, (x) => (x.date = el.value));
+        }
         break;
       case 'duree': {
         const n = parseInt(el.value, 10);
-        if (n >= 5) majTournee(t, (x) => (x.etapes[Number(el.dataset.i)].dureeMin = n));
+        if (n >= 5 && t) majTournee(t, (x) => (x.etapes[Number(el.dataset.i)].dureeMin = n));
         break;
       }
       case 'prospection': {
@@ -973,21 +1212,17 @@
         A.crOuvert = null;
         render();
         break;
-      case 'filtre-perimetre':
-        A.filtres.perimetre = el.value;
-        dessinerComptes(true);
+      case 'pil-periode':
+        A.pilotage.periodeJours = Number(el.value);
+        render();
         break;
-      case 'filtre-statut':
-        el.checked ? A.filtres.statuts.add(el.value) : A.filtres.statuts.delete(el.value);
-        dessinerComptes(false);
+      case 'pil-secteur':
+        A.pilotage.secteurId = el.value;
+        render();
         break;
-      case 'filtre-potentiel':
-        el.checked ? A.filtres.potentiels.add(el.value) : A.filtres.potentiels.delete(el.value);
-        dessinerComptes(false);
-        break;
-      case 'filtre-importants':
-        A.filtres.importants = el.checked;
-        dessinerComptes(false);
+      case 'pil-activite':
+        A.pilotage.activite = el.value;
+        render();
         break;
       case 'fiche-important':
         majCompte(compte(A.ficheId), { important: el.checked });
@@ -999,16 +1234,7 @@
     }
   }
 
-  function surSaisie(ev) {
-    const el = ev.target;
-    if (el.dataset.action === 'recherche') {
-      A.recherche = el.value;
-      const t = tournee(A.tourneeId);
-      if (t) document.getElementById('resultats-recherche').innerHTML = resultatsRecherche(t);
-    }
-  }
-
-  // glisser-déposer des étapes (ordinateur ; boutons ↑ ↓ sur mobile)
+  // glisser-déposer des visites (ordinateur ; boutons ↑ ↓ sur mobile)
   function surDebutGlisser(ev) {
     const li = ev.target.closest && ev.target.closest('li.etape');
     if (!li) return;
@@ -1030,7 +1256,7 @@
     ev.preventDefault();
     const de = A.drag;
     A.drag = null;
-    deplacer(tournee(A.tourneeId), de, Number(li.dataset.i));
+    deplacer(tournee(A.prep.tourneeId), de, Number(li.dataset.i));
   }
   function surFinGlisser() {
     A.drag = null;
@@ -1042,7 +1268,6 @@
     A.profil = lireProfil();
     document.addEventListener('click', surClic, true); // phase de capture : fonctionne aussi dans les popups de la carte
     document.addEventListener('change', surChangement);
-    document.addEventListener('input', surSaisie);
     document.addEventListener('submit', (ev) => {
       if (ev.target.matches('form.cr')) {
         ev.preventDefault();

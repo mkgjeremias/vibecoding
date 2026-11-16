@@ -58,3 +58,19 @@ est-ce que je peux partager la page à Claude pour travailler sur le fond et te 
 ## 2026-11-16
 
 oui (publier la page sur claude.ai, commit et push de la correction du fond de carte)
+
+## 2026-11-16
+
+modification
+
+## 2026-11-16
+
+Brief d'itération (collé) : parcours simple et guidé pour le commercial (Préparer en 3 étapes : Où aller ? / Qui voir ? / Caler les rendez-vous ; Ma tournée), tableau de Pilotage pour la direction. 11 secteurs (AA, AB, AC, AE, FB, FC partagé entre 2 commerciaux, BA, BB, CA, CB, CD) ; activités des comptes (fumisterie individuelle, fumisterie tertiaire, ventilation, industrie) ; fréquence de visite par potentiel (A 6 sem., B 3 mois, C 6 mois) et comptes « à voir » ; raisons en clair, score masqué ; suppression des écrans Carte et Équipe ; tests à jour (secteurs, fréquence, priorisation, optimiseur, multi-jours, pilotage).
+
+## 2026-11-16
+
+ajoute cette modification : 11 commerciaux itinérants, un par secteur ; FC découpage provisoire très étendu (1 commercial), cas de démonstration des tournées sur plusieurs jours ; les 2 commerciaux sédentaires ne sont pas concernés.
+
+## 2026-11-16
+
+commit

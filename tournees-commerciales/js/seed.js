@@ -1,10 +1,13 @@
 /*
  * Génération déterministe des données fictives (même graine et même date = mêmes données).
- * - 12 commerciaux, 12 secteurs couvrant la France métropolitaine (hors Corse), de tailles différentes :
- *   un secteur urbain dense (Île-de-France), un secteur rural étendu (Limousin – Auvergne, avec la Creuse).
- * - Par commercial : 60 clients et 40 prospects placés dans de vraies communes (centre de la commune, légèrement décalé).
- * - 12 mois d'historique simulés jour par jour (tournées du mardi au vendredi) : visites, devis, commandes, échanges.
- * - Chaque secteur contient des cas visibles de chaque statut.
+ * - 11 secteurs (découpage commercial réel par départements), un commercial itinérant par secteur.
+ *   AA est urbain et dense ; FC, provisoire et très étendu (Bretagne → Limousin, Corse), sert de cas
+ *   de démonstration des tournées sur plusieurs jours.
+ * - Par commercial : 60 clients et 40 prospects placés dans de vraies communes (centre de la commune, légèrement décalé),
+ *   avec une ou plusieurs activités.
+ * - 12 mois d'historique simulés jour par jour (tournées du mardi au vendredi), avec un rythme de visite
+ *   et un taux de compte-rendu propres à chaque commercial (pour que le pilotage montre des écarts).
+ * - Chaque secteur contient tous les statuts et toutes les activités.
  * Noms d'entreprises et de personnes inventés, montants fictifs.
  */
 window.TC = window.TC || {};
@@ -17,31 +20,54 @@ window.TC = window.TC || {};
   S.NB_CLIENTS = 60;
   S.NB_PROSPECTS = 40;
 
+  /*
+   * rythme : probabilité d'être en tournée un jour de tournée, nombre de visites par jour (min-max),
+   * taux de visites avec compte-rendu. Volontairement différent d'un commercial à l'autre.
+   */
   S.SECTEURS = [
-    { id: 'idf', nom: 'Île-de-France', type: 'urbain', departements: ['75', '92', '93', '94', '78', '91', '95', '77'], couleur: '#1d4ed8', domicile: 'Vincennes', comPrenom: 'Karim', comNom: 'Maquetton', tel: '01' },
-    { id: 'nord', nom: 'Hauts-de-France', type: 'standard', departements: ['59', '62', '80', '02', '60'], couleur: '#7c3aed', domicile: 'Arras', comPrenom: 'Sandrine', comNom: 'Exemplier', tel: '03' },
-    { id: 'normandie', nom: 'Normandie – Eure-et-Loir', type: 'standard', departements: ['14', '27', '50', '61', '76', '28'], couleur: '#0369a1', domicile: 'Caen', comPrenom: 'Hugo', comNom: 'Prototel', tel: '02' },
-    { id: 'bretagne', nom: 'Bretagne', type: 'standard', departements: ['22', '29', '35', '56'], couleur: '#0f766e', domicile: 'Cesson-Sévigné', comPrenom: 'Julien', comNom: 'Testard', tel: '02' },
-    { id: 'loire', nom: 'Pays de la Loire – Touraine', type: 'standard', departements: ['44', '49', '53', '72', '85', '37', '41'], couleur: '#15803d', domicile: 'Angers', comPrenom: 'Claire', comNom: 'Démonval', tel: '02' },
-    { id: 'est', nom: 'Grand Est', type: 'standard', departements: ['08', '10', '51', '52', '54', '55', '57', '67', '68', '88'], couleur: '#a16207', domicile: 'Nancy', comPrenom: 'Mathieu', comNom: 'Simulard', tel: '03' },
-    { id: 'bourgogne', nom: 'Bourgogne – Franche-Comté – Loiret', type: 'standard', departements: ['21', '25', '39', '58', '70', '71', '89', '90', '18', '45'], couleur: '#9f1239', domicile: 'Dijon', comPrenom: 'Inès', comNom: 'Essayan', tel: '03' },
-    { id: 'rhone', nom: 'Rhône-Alpes', type: 'standard', departements: ['01', '07', '26', '38', '42', '69', '73', '74'], couleur: '#b45309', domicile: 'Saint-Priest', comPrenom: 'Romain', comNom: 'Pilotier', tel: '04' },
-    { id: 'limousin', nom: 'Limousin – Auvergne', type: 'rural', departements: ['23', '87', '19', '36', '03', '63', '15', '43'], renfort: { '23': 8 }, couleur: '#4d7c0f', domicile: 'Guéret', comPrenom: 'Aurélie', comNom: 'Modelin', tel: '05' },
-    { id: 'sudouest', nom: 'Sud-Ouest Atlantique', type: 'standard', departements: ['33', '17', '16', '24', '40', '47', '64', '79', '86'], couleur: '#be185d', domicile: 'Libourne', comPrenom: 'Élodie', comNom: 'Fictelle', tel: '05' },
-    { id: 'midi', nom: 'Midi-Pyrénées', type: 'standard', departements: ['31', '09', '12', '32', '46', '65', '81', '82'], couleur: '#c2410c', domicile: 'Muret', comPrenom: 'Yann', comNom: 'Croquerel', tel: '05' },
-    { id: 'med', nom: 'Méditerranée', type: 'standard', departements: ['30', '34', '11', '66', '48', '13', '84', '83', '04', '05', '06'], couleur: '#0e7490', domicile: 'Nîmes', comPrenom: 'Fatima', comNom: 'Esquissot', tel: '04' },
+    { id: 'AA', nom: 'AA · Paris, petite couronne, Yvelines, Val-d’Oise, Oise', type: 'urbain', departements: ['60', '75', '78', '92', '93', '94', '95'], couleur: '#1d4ed8', domicile: 'Vincennes', comPrenom: 'Karim', comNom: 'Maquetton', tel: '01', rythme: [0.85, 3, 5, 0.9] },
+    { id: 'AB', nom: 'AB · Centre-Est francilien, Champagne, Orléanais', type: 'standard', departements: ['10', '28', '41', '45', '51', '77', '89', '91'], couleur: '#7c3aed', domicile: 'Montargis', comPrenom: 'Sandrine', comNom: 'Exemplier', tel: '02', rythme: [0.7, 2, 4, 0.75] },
+    { id: 'AC', nom: 'AC · Normandie', type: 'standard', departements: ['14', '27', '50', '61', '76'], couleur: '#0369a1', domicile: 'Caen', comPrenom: 'Hugo', comNom: 'Prototel', tel: '02', rythme: [0.85, 3, 4, 0.85] },
+    { id: 'AE', nom: 'AE · Nord, Pas-de-Calais, Picardie, Ardennes', type: 'standard', departements: ['02', '08', '59', '62', '80'], couleur: '#0f766e', domicile: 'Arras', comPrenom: 'Julien', comNom: 'Testard', tel: '03', rythme: [0.9, 3, 5, 0.95] },
+    { id: 'FB', nom: 'FB · Lorraine, Alsace, Franche-Comté nord', type: 'standard', departements: ['52', '54', '55', '57', '67', '68', '70', '88', '90'], couleur: '#a16207', domicile: 'Nancy', comPrenom: 'Mathieu', comNom: 'Simulard', tel: '03', rythme: [0.75, 2, 4, 0.6] },
+    { id: 'FC', nom: 'FC · Ouest, Centre, Limousin, Corse (provisoire)', type: 'etendu', departements: ['18', '22', '23', '29', '35', '36', '37', '44', '49', '53', '56', '72', '79', '85', '86', '87', '2A', '2B'], renfort: { '23': 12 }, couleur: '#4d7c0f', domicile: 'Poitiers', comPrenom: 'Aurélie', comNom: 'Modelin', tel: '05', rythme: [0.8, 2, 4, 0.7] },
+    { id: 'BA', nom: 'BA · Auvergne, Bourgogne sud, Loire', type: 'standard', departements: ['03', '07', '21', '42', '43', '58', '63', '71'], couleur: '#9f1239', domicile: 'Roanne', comPrenom: 'Inès', comNom: 'Essayan', tel: '04', rythme: [0.85, 3, 4, 0.8] },
+    { id: 'BB', nom: 'BB · Rhône, Alpes, Jura', type: 'standard', departements: ['01', '25', '26', '38', '39', '69', '73', '74'], couleur: '#b45309', domicile: 'Saint-Priest', comPrenom: 'Romain', comNom: 'Pilotier', tel: '04', rythme: [0.9, 3, 5, 0.9] },
+    { id: 'CA', nom: 'CA · Provence, Côte d’Azur, Gard, Hérault', type: 'standard', departements: ['04', '05', '06', '13', '30', '34', '83', '84'], couleur: '#0e7490', domicile: 'Aix-en-Provence', comPrenom: 'Fatima', comNom: 'Esquissot', tel: '04', rythme: [0.8, 3, 4, 0.65] },
+    { id: 'CB', nom: 'CB · Aquitaine, Charentes, Corrèze', type: 'standard', departements: ['16', '17', '19', '24', '32', '33', '40', '46', '47', '64', '65'], couleur: '#be185d', domicile: 'Libourne', comPrenom: 'Élodie', comNom: 'Fictelle', tel: '05', rythme: [0.85, 3, 5, 0.85] },
+    { id: 'CD', nom: 'CD · Midi toulousain, Languedoc ouest', type: 'standard', departements: ['09', '11', '12', '15', '31', '48', '66', '81', '82'], couleur: '#c2410c', domicile: 'Muret', comPrenom: 'Yann', comNom: 'Croquerel', tel: '05', rythme: [0.65, 2, 4, 0.55] },
   ];
 
   /** Poids de tirage d'une commune selon sa population et sa distance au domicile. */
   const POIDS_DISTANCE = {
     urbain: (pop, d) => Math.sqrt(pop) * (d < 20 ? 1 : d < 40 ? 0.35 : 0.04),
-    rural: (pop, d) => Math.pow(pop, 0.35) * (d < 150 ? 1 : 0.6),
+    etendu: (pop, d) => Math.pow(pop, 0.35) * (d < 200 ? 1 : 0.7),
     standard: (pop, d) => Math.sqrt(pop) * (d < 60 ? 1 : d < 110 ? 0.55 : 0.15),
   };
   /** Rayon (km) d'une journée de tournée simulée dans l'historique. */
-  const RAYON_JOURNEE = { urbain: 12, rural: 60, standard: 35 };
-  /** Intervalle cible entre deux visites (jours) selon le potentiel. */
-  const INTERVALLE = { A: 35, B: 60, C: 110 };
+  const RAYON_JOURNEE = { urbain: 15, etendu: 60, standard: 45 };
+  /** Intervalle visé entre deux visites dans l'historique (jours), proche de la fréquence cible. */
+  const INTERVALLE = { A: 38, B: 80, C: 95 };
+
+  /** Activités d'un compte selon son type (une ou plusieurs). */
+  function tirerActivites(r, type) {
+    const A = ['fumisterie_individuelle', 'fumisterie_tertiaire', 'ventilation', 'industrie'];
+    const poids = {
+      fumiste: [70, 30, 0, 0],
+      installateur: [50, 15, 35, 0],
+      bureau_etudes: [0, 35, 35, 30],
+      distributeur: [35, 25, 25, 15],
+    }[type];
+    const out = [r.weighted(A, (a) => poids[A.indexOf(a)])];
+    const secondes = type === 'distributeur' ? 2 : type === 'fumiste' ? 0.35 : 0.3;
+    for (let k = 0; k < (secondes >= 1 ? secondes : 1); k++) {
+      if (secondes >= 1 || r.chance(secondes)) {
+        const a = r.weighted(A, (x) => (out.includes(x) ? 0 : poids[A.indexOf(x)] + 5));
+        if (!out.includes(a)) out.push(a);
+      }
+    }
+    return out;
+  }
 
   const NOMS = ['Testard', 'Exemplier', 'Fictelle', 'Maquetton', 'Prototel', 'Démonval', 'Simulard', 'Essayan', 'Brouillon', 'Pilotier', 'Modelin', 'Ébauchet', 'Esquissot', 'Croquerel', 'Factisse', 'Imaginel', 'Supposin', 'Hypothès', 'Virtuelle', 'Placebois', 'Fantômat', 'Chimérand', 'Inventin', 'Fabulier', 'Factotum', 'Lambdin', 'Quidamet', 'Untelier', 'Duponsard', 'Martinval', 'Durandel', 'Machinet', 'Trucheau', 'Bidulon', 'Chosier', 'Tartempion', 'Pseudonel', 'Anonymat', 'Gabarit', 'Patronel', 'Calquin', 'Mockeret', 'Dummard', 'Samplet', 'Fakenval', 'Postichet', 'Leurrier', 'Mirageot'];
   const PRENOMS = ['Thomas', 'Nicolas', 'Julien', 'Sébastien', 'Mathieu', 'Antoine', 'Pierre', 'Romain', 'Laurent', 'Olivier', 'David', 'Stéphane', 'Christophe', 'Frédéric', 'Jérôme', 'Yann', 'Kevin', 'Mehdi', 'Sophie', 'Nathalie', 'Isabelle', 'Céline', 'Aurélie', 'Émilie', 'Claire', 'Camille', 'Laura', 'Sandrine', 'Karine', 'Virginie', 'Hélène', 'Marion', 'Inès', 'Léa', 'Amandine', 'Fatima'];
@@ -165,6 +191,7 @@ window.TC = window.TC || {};
           nature,
           raisonSociale: raison,
           type,
+          activites: tirerActivites(r, type),
           adresse: r.int(1, 120) + ' ' + r.pick(RUES),
           codePostal: c.cp,
           commune: c.nom,
@@ -184,6 +211,12 @@ window.TC = window.TC || {};
           important: !prospect && potentiel === 'A' && r.chance(0.5),
           creeLe: U.isoDay(prospect ? U.addDays(t0, -r.int(20, 330)) : U.addDays(t0, -r.int(400, 3000))),
         };
+        // chaque activité est présente dans chaque secteur (clients 10 à 13 et prospects 4 à 7)
+        const rangActivite = prospect ? rang - 4 : rang - 10;
+        if (rangActivite >= 0 && rangActivite < 4) {
+          const act = ['fumisterie_individuelle', 'fumisterie_tertiaire', 'ventilation', 'industrie'][rangActivite];
+          if (!compte.activites.includes(act)) compte.activites.unshift(act);
+        }
         etat.compte = compte;
         comptes.push(compte);
         etats.set(compte.id, etat);
@@ -232,15 +265,16 @@ window.TC = window.TC || {};
       const sec = S.SECTEURS[ci];
       const mine = [...etats.values()].filter((e) => e.compte.commercialId === com.id);
       for (let day = new Date(debut); day < t0; day = U.addDays(day, 1)) {
-        if (!joursOuvres(day) || !r.chance(0.85)) continue;
+        const [enTournee, vMin, vMax, tauxCR] = sec.rythme;
+        if (!joursOuvres(day) || !r.chance(enTournee)) continue;
         const cands = mine
           .filter((e) => eligible(e, day))
           .map((e) => ({ e, u: urgence(e, day) }))
-          .filter((x) => x.u >= 0.6)
+          .filter((x) => x.u >= 0.4)
           .sort((a, b) => b.u - a.u);
         if (!cands.length) continue;
         const ancre = r.pick(cands.slice(0, 8)).e;
-        const n = r.int(3, 5);
+        const n = r.int(vMin, vMax);
         const groupe = [ancre, ...cands.filter((x) => x.e !== ancre && TC.geo.haversineKm(x.e.compte, ancre.compte) < RAYON_JOURNEE[sec.type]).slice(0, n - 1).map((x) => x.e)];
         const { m, order } = ordonner(com.domicile, groupe.map((g) => g.compte));
         let clock = 8 * 60 + r.int(0, 30);
@@ -262,11 +296,15 @@ window.TC = window.TC || {};
               : { positif: 35, neutre: 25, devis_demande: 25, commande: 0, negatif: 10, absent: 5 })[x],
           );
           vseq += 1;
-          const v = { id: 'v' + String(vseq).padStart(5, '0'), compteId: c.id, commercialId: com.id, debut: U.isoDateTime(at(day, clock)), dureeMin: duree, resultat };
-          if (r.chance(0.7)) v.note = r.pick(NOTES);
-          if (resultat !== 'absent' && r.chance(0.6)) {
-            v.prochaineAction = r.pick(S.PROCHAINES_ACTIONS);
-            v.dateRelance = U.isoDay(U.addDays(day, r.int(7, 45)));
+          const v = { id: 'v' + String(vseq).padStart(5, '0'), compteId: c.id, commercialId: com.id, debut: U.isoDateTime(at(day, clock)), dureeMin: duree };
+          // une partie des visites est déclarée sans compte-rendu (taux propre au commercial)
+          if (r.chance(tauxCR)) {
+            v.resultat = resultat;
+            if (r.chance(0.7)) v.note = r.pick(NOTES);
+            if (resultat !== 'absent' && r.chance(0.6)) {
+              v.prochaineAction = r.pick(S.PROCHAINES_ACTIONS);
+              v.dateRelance = U.isoDay(U.addDays(day, r.int(7, 45)));
+            }
           }
           visites.push(v);
           e.derniereVisite = new Date(day);
@@ -381,16 +419,19 @@ window.TC = window.TC || {};
     const jour1 = U.prochainJourTournee(t0, true);
     const jourSemaineSuivante = U.addDays(jour1, 7);
     const creeLe = U.isoDateTime(t0);
-    const nouvelleTournee = (com, date, groupe, extra) => {
+    /** @param confirmes nombre d'étapes déjà confirmées (rendez-vous pris) */
+    const nouvelleTournee = (com, date, groupe, confirmes, extra) => {
       const { order } = ordonner(com.domicile, groupe.map((g) => g.compte));
+      const comptesT = order.map((i) => groupe[i - 1].compte);
       tournees.push(Object.assign({
         id: 't_' + com.id + '_' + U.isoDay(date),
         commercialId: com.id,
         date: U.isoDay(date),
+        departements: [...new Set(comptesT.map((c) => c.departement))].sort(),
         multiJours: false,
         decoupageRefuse: false,
         prospection: [],
-        etapes: order.map((i) => ({ compteId: groupe[i - 1].compte.id })),
+        etapes: comptesT.map((c, k) => ({ compteId: c.id, confirme: k < confirmes })),
         creeLe,
         modifieeLe: creeLe,
       }, extra || {}));
@@ -405,19 +446,23 @@ window.TC = window.TC || {};
         g.forEach((x) => pris.add(x));
         return g;
       };
-      if (sec.type === 'rural') {
-        // 1) tournée lointaine sur plusieurs jours, déjà acceptée (nuit sur place)
-        // 2) tournée mêlant visites proches et lointaines : l'outil propose un découpage
-        const loin = classes.filter((x) => TC.geo.haversineKm(com.domicile, x.e.compte) > 100);
-        const proche = classes.filter((x) => TC.geo.haversineKm(com.domicile, x.e.compte) <= 60);
-        nouvelleTournee(com, jour1, grappe(loin[0].e, 60, 7), { multiJours: true });
+      if (sec.type === 'etendu') {
+        // 1) tournée lointaine sur plusieurs jours, déjà acceptée (nuit sur place), rendez-vous confirmés
+        // 2) tournée mêlant visites proches et lointaines, en préparation : l'outil propose un découpage
+        const horsCorse = classes.filter((x) => !TC.geo.estCorse(x.e.compte));
+        const loin = horsCorse.filter((x) => TC.geo.haversineKm(com.domicile, x.e.compte) > 130);
+        const dist = (x) => TC.geo.haversineKm(com.domicile, x.e.compte);
+        const proche = horsCorse.slice().sort((a, b) => dist(a) - dist(b));
+        const g1 = grappe(loin[0].e, 60, 7);
+        nouvelleTournee(com, jour1, g1, g1.length, { multiJours: true });
         const reste = loin.filter((x) => !pris.has(x.e));
-        nouvelleTournee(com, jourSemaineSuivante, [...grappe(proche[0].e, 50, 3), ...grappe(reste[0].e, 60, 3)]);
+        nouvelleTournee(com, jourSemaineSuivante, [...grappe(proche[0].e, 50, 3), ...grappe(reste[0].e, 60, 3)], 0);
       } else {
         const r1 = RAYON_JOURNEE[sec.type];
-        nouvelleTournee(com, jour1, grappe(classes[0].e, r1, 5));
+        const g1 = grappe(classes[0].e, r1, 5);
+        nouvelleTournee(com, jour1, g1, g1.length);
         const suivant = classes.find((x) => !pris.has(x.e));
-        nouvelleTournee(com, jourSemaineSuivante, grappe(suivant.e, r1, 5));
+        nouvelleTournee(com, jourSemaineSuivante, grappe(suivant.e, r1, 5), 2);
       }
     });
 

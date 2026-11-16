@@ -259,14 +259,182 @@
     });
   });
 
+  // ---------------------------------------------------------------- fréquence de visite
+  describe('Fréquence de visite et comptes à voir', () => {
+    const today = new Date(2026, 10, 16);
+    const jour = (n) => U.isoDay(U.addDays(today, -n));
+    const info = (compte, extra) => {
+      const i = Object.assign({ compte, derniereVisite: undefined, ca6m: 0, caPrec6m: 0, devisEnCours: [] }, extra);
+      i.statut = D.computeStatut(compte, i, P, today);
+      i.aVoir = D.aVoir(i, P, today);
+      return i;
+    };
+    it('fréquences par défaut : A 6 semaines, B 3 mois, C 6 mois', () => {
+      expect(P.frequenceAJours).toBe(42);
+      expect(P.frequenceBJours).toBe(91);
+      expect(P.frequenceCJours).toBe(182);
+    });
+    it('client A vu il y a 50 jours : en retard, « pas vu depuis 7 semaines »', () => {
+      const i = info({ nature: 'client', potentiel: 'A' }, { derniereVisite: jour(50) });
+      expect(i.aVoir.retard).toBeTruthy();
+      expect(i.aVoir.raisons[0]).toBe('pas vu depuis 7 semaines');
+    });
+    it('client A vu il y a 30 jours : à jour', () => {
+      expect(info({ nature: 'client', potentiel: 'A' }, { derniereVisite: jour(30) }).aVoir.est).toBeFalsy();
+    });
+    it('client C vu il y a 150 jours : pas en retard sur 6 mois, mais à risque', () => {
+      const i = info({ nature: 'client', potentiel: 'C' }, { derniereVisite: jour(150) });
+      expect(i.aVoir.retard).toBeFalsy();
+      expect(i.aVoir.risque).toBeTruthy();
+      expect(i.aVoir.raisons).toContain('client à risque');
+    });
+    it('raisons en clair : devis en attente, CA en baisse, prospect chaud, jamais vu', () => {
+      const d = info({ nature: 'client', potentiel: 'B' }, { derniereVisite: jour(10), devisEnCours: [{ montantHT: 8000 }] });
+      expect(d.aVoir.raisons[0]).toContain('devis de');
+      expect(d.aVoir.raisons[0]).toContain('en attente');
+      const b = info({ nature: 'client', potentiel: 'B' }, { derniereVisite: jour(10), ca6m: 3000, caPrec6m: 5000 });
+      expect(b.aVoir.raisons).toContain('CA en baisse de 40 %');
+      expect(info({ nature: 'prospect', potentiel: 'B', score: 70, etape: 'contacte' }).aVoir.raisons).toContain('prospect chaud');
+      expect(info({ nature: 'client', potentiel: 'C' }).aVoir.raisons).toContain('jamais vu');
+    });
+    it('un prospect perdu n’est jamais à voir', () => {
+      expect(info({ nature: 'prospect', potentiel: 'A', score: 90, etape: 'perdu' }, { devisEnCours: [{ montantHT: 1 }] }).aVoir.est).toBeFalsy();
+    });
+    it('durée en clair', () => {
+      expect(D.dureeEnClair(152)).toBe('5 mois');
+      expect(D.dureeEnClair(21)).toBe('3 semaines');
+    });
+  });
+
+  // ---------------------------------------------------------------- priorisation
+  describe('Priorisation', () => {
+    const today = new Date(2026, 10, 16);
+    const mk = (id, dep, aVoir, score) => ({ compte: { id, raisonSociale: id, departement: dep, nature: 'client', potentiel: 'C' }, derniereVisite: U.isoDay(U.addDays(today, -score)), devisEnCours: [], statut: 'client_actif', aVoir });
+    it('les comptes à voir passent avant les autres, même avec une priorité plus faible', () => {
+      const a = mk('a', '23', { est: false }, 179);
+      const b = mk('b', '23', { est: true, retard: true }, 1);
+      expect(D.trierParPriorite([a, b], today).map((x) => x.compte.id)).toEqual(['b', 'a']);
+    });
+    it('à égalité, le compte le plus ancien en visite passe d’abord', () => {
+      const a = mk('a', '23', { est: true }, 20);
+      const b = mk('b', '23', { est: true }, 150);
+      expect(D.trierParPriorite([a, b], today)[0].compte.id).toBe('b');
+    });
+    it('charge par département : total et détail, département le plus chargé en tête', () => {
+      const l = D.chargeParDepartement([
+        mk('a', '87', { est: true, retard: true }, 1),
+        mk('b', '23', { est: true, retard: true, devis: true }, 1),
+        mk('c', '23', { est: true, chaud: true }, 1),
+        mk('d', '23', { est: false }, 1),
+      ]);
+      expect(l[0].departement).toBe('23');
+      expect(l[0].aVoir).toBe(2);
+      expect(l[0].comptes).toBe(3);
+      expect(l[0].devis).toBe(1);
+      expect(l[1].aVoir).toBe(1);
+    });
+  });
+
+  // ---------------------------------------------------------------- pilotage
+  describe('Indicateurs du pilotage', () => {
+    const today = new Date(2026, 10, 17);
+    const jour = (n, h) => U.isoDay(U.addDays(today, -n)) + 'T' + (h || '10:00') + ':00';
+    const base = { lat: 46, lng: 2 };
+    const fixture = (tournees) => {
+      const data = {
+        secteurs: [{ id: 'S1', nom: 'S1', departements: ['23'] }],
+        commerciaux: [{ id: 'c1', prenom: 'A', nom: 'B', secteurId: 'S1', domicile: Object.assign({ commune: 'X' }, base) }],
+        comptes: [
+          { id: 'k1', nature: 'client', potentiel: 'A', type: 'installateur', activites: ['ventilation', 'industrie'], commercialId: 'c1', secteurId: 'S1', departement: '23', lat: 46.1, lng: 2, raisonSociale: 'K1' },
+          { id: 'k2', nature: 'client', potentiel: 'B', type: 'fumiste', activites: ['fumisterie_individuelle'], commercialId: 'c1', secteurId: 'S1', departement: '23', lat: 46.1, lng: 2, raisonSociale: 'K2' },
+        ],
+        visites: [
+          { id: 'v1', compteId: 'k1', commercialId: 'c1', debut: jour(2), resultat: 'positif' },
+          { id: 'v2', compteId: 'k1', commercialId: 'c1', debut: jour(9), resultat: 'devis_demande' },
+          { id: 'v3', compteId: 'k1', commercialId: 'c1', debut: jour(16), resultat: 'commande' },
+          { id: 'v4', compteId: 'k1', commercialId: 'c1', debut: jour(23) },
+          { id: 'v5', compteId: 'k2', commercialId: 'c1', debut: jour(130), resultat: 'neutre' },
+        ],
+        commandes: [], devis: [], echanges: [], tournees: tournees || [], parametres: P,
+      };
+      return { data, der: D.derive(data, today) };
+    };
+    const calculer = (f, extra) => D.pilotage(Object.assign({ data: f.data, der: f.der, today, periodeJours: 28, secteurId: 'tous', activite: 'toutes' }, extra));
+    it('visites, visites par semaine, alerte sous 10', () => {
+      const r = calculer(fixture());
+      expect(r.synthese.visites).toBe(4);
+      expect(r.lignes[0].visitesSemaine).toBeCloseTo(1);
+      expect(r.lignes[0].alerteVisites).toBeTruthy();
+    });
+    it('km par visite : aller-retour domicile ↔ client chaque jour', () => {
+      const r = calculer(fixture());
+      const attendu = 2 * G.haversineKm(base, { lat: 46.1, lng: 2 }) * P.coefRoutier;
+      expect(r.synthese.kmParVisite).toBeCloseTo(attendu, 0.01);
+    });
+    it('compte-rendu, devis et commandes issus des visites déclarées', () => {
+      const r = calculer(fixture());
+      expect(r.lignes[0].partCompteRendu).toBeCloseTo(0.75);
+      expect(r.lignes[0].devis).toBe(1);
+      expect(r.lignes[0].commandes).toBe(1);
+    });
+    it('part des clients A et B vus dans leur fréquence', () => {
+      expect(calculer(fixture()).lignes[0].partABDansFrequence).toBeCloseTo(0.5);
+    });
+    it('clients à risque sans visite prévue, puis avec une tournée prévue', () => {
+      expect(calculer(fixture()).lignes[0].risquesSansVisitePrevue).toBe(1);
+      const t = { id: 't', commercialId: 'c1', date: U.isoDay(U.addDays(today, 3)), etapes: [{ compteId: 'k2' }] };
+      expect(calculer(fixture([t])).lignes[0].risquesSansVisitePrevue).toBe(0);
+    });
+    it('répartition par activité et filtre par activité', () => {
+      const f = fixture();
+      const r = calculer(f);
+      expect(r.parActivite.ventilation).toBe(4);
+      expect(r.parActivite.industrie).toBe(4);
+      expect(r.parActivite.fumisterie_individuelle).toBe(0);
+      expect(calculer(f, { activite: 'fumisterie_individuelle' }).synthese.visites).toBe(0);
+    });
+    it('part des comptes à voir par secteur', () => {
+      const r = calculer(fixture());
+      expect(r.parSecteur[0].partAVoir).toBeCloseTo(0.5);
+    });
+  });
+
   // ---------------------------------------------------------------- données
   describe('Données de démonstration', () => {
     const today = new Date(2026, 10, 17);
     const data = TC.seed.generer(today, P);
     const der = D.derive(data, today);
-    it('12 commerciaux et 12 secteurs', () => {
-      expect(data.commerciaux.length).toBe(12);
-      expect(data.secteurs.length).toBe(12);
+    it('11 secteurs, un commercial par secteur', () => {
+      expect(data.secteurs.map((s) => s.id).join(',')).toBe('AA,AB,AC,AE,FB,FC,BA,BB,CA,CB,CD');
+      expect(data.commerciaux.length).toBe(11);
+      for (const s of data.secteurs) expect(data.commerciaux.filter((c) => c.secteurId === s.id).length).toBe(1);
+    });
+    it('départements des secteurs conformes au découpage (FC comprend la Corse)', () => {
+      const fc = data.secteurs.find((s) => s.id === 'FC');
+      expect(fc.departements.length).toBe(18);
+      expect(fc.departements).toContain('2A');
+      expect(data.secteurs.find((s) => s.id === 'AA').departements.join(',')).toBe('60,75,78,92,93,94,95');
+      const tous = data.secteurs.flatMap((s) => s.departements);
+      expect(new Set(tous).size).toBe(tous.length); // aucun département dans deux secteurs
+    });
+    it('domicile de chaque commercial dans son secteur', () => {
+      for (const c of data.commerciaux) {
+        const s = data.secteurs.find((x) => x.id === c.secteurId);
+        expect(window.TC_COMMUNES.some((x) => x[0] === c.domicile.commune && s.departements.includes(x[1]))).toBeTruthy();
+      }
+    });
+    it('chaque secteur contient toutes les activités', () => {
+      for (const s of data.secteurs) {
+        const acts = new Set(data.comptes.filter((c) => c.secteurId === s.id).flatMap((c) => c.activites));
+        for (const a of D.ACTIVITES) expect([...acts]).toContain(a);
+      }
+    });
+    it('des visites sans compte-rendu, avec un taux différent selon les commerciaux', () => {
+      const taux = data.commerciaux.map((c) => {
+        const vs = data.visites.filter((v) => v.commercialId === c.id);
+        return vs.filter((v) => v.resultat).length / vs.length;
+      });
+      expect(Math.max(...taux) - Math.min(...taux)).toBeGreaterThan(0.2);
     });
     it('60 clients et 40 prospects par commercial', () => {
       for (const c of data.commerciaux) {
@@ -279,15 +447,15 @@
       const deps = new Map(data.secteurs.map((s) => [s.id, s.departements]));
       for (const c of data.comptes) expect(deps.get(c.secteurId)).toContain(c.departement);
     });
-    it('secteur rural étendu (Creuse) et secteur urbain dense', () => {
-      const lim = data.comptes.filter((c) => c.secteurId === 'limousin');
-      expect(lim.filter((c) => c.departement === '23').length).toBeGreaterThan(5);
+    it('secteur étendu (FC, avec la Creuse) et secteur urbain dense (AA)', () => {
+      const fc = data.comptes.filter((c) => c.secteurId === 'FC');
+      expect(fc.filter((c) => c.departement === '23').length).toBeGreaterThan(2);
       const dist = (s) => {
         const com = data.commerciaux.find((c) => c.secteurId === s);
         const l = data.comptes.filter((c) => c.secteurId === s).map((c) => G.haversineKm(com.domicile, c)).sort((a, b) => a - b);
         return l[Math.floor(l.length / 2)];
       };
-      expect(dist('limousin')).toBeGreaterThan(3 * dist('idf'));
+      expect(dist('FC')).toBeGreaterThan(3 * dist('AA'));
     });
     it('chaque secteur contient chaque statut', () => {
       for (const s of data.secteurs) {
@@ -296,7 +464,7 @@
       }
     });
     it('12 mois d’historique de visites, du mardi au vendredi', () => {
-      expect(data.visites.length).toBeGreaterThan(5000);
+      expect(data.visites.length).toBeGreaterThan(4000);
       expect(U.joursDepuis(data.visites[0].debut.slice(0, 10), today)).toBeGreaterThan(330);
       for (const v of data.visites) expect(U.estJourTournee(U.parseDay(v.debut))).toBeTruthy();
     });
@@ -306,11 +474,14 @@
       expect(b.visites.length).toBe(data.visites.length);
     });
     it('deux tournées prévues par commercial, sur des jours de tournée', () => {
-      expect(data.tournees.length).toBe(24);
+      expect(data.tournees.length).toBe(22);
       for (const t of data.tournees) expect(U.estJourTournee(U.parseDay(t.date))).toBeTruthy();
     });
-    it('Limousin : une tournée sur plusieurs jours et une tournée à découper', () => {
-      const com = data.commerciaux.find((c) => c.secteurId === 'limousin');
+    it('chaque secteur a des comptes à voir', () => {
+      for (const s of data.secteurs) expect([...der.infos.values()].filter((i) => i.compte.secteurId === s.id && i.aVoir.est).length).toBeGreaterThan(10);
+    });
+    it('FC : une tournée sur plusieurs jours et une tournée à découper', () => {
+      const com = data.commerciaux.find((c) => c.secteurId === 'FC');
       const [t1, t2] = data.tournees.filter((t) => t.commercialId === com.id);
       const byId = new Map(data.comptes.map((c) => [c.id, c]));
       const prep = (t) => {

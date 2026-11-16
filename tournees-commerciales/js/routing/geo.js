@@ -60,7 +60,7 @@ window.TC = window.TC || {};
       nom: 'estuaire de la Loire',
       trace: [
         { lat: 47.27, lng: -2.15 },
-        { lat: 47.3, lng: -2.05 },
+        { lat: 47.31, lng: -2.05 },
         { lat: 47.27, lng: -1.88 },
         { lat: 47.2, lng: -1.76 },
         { lat: 47.19, lng: -1.62 },
@@ -77,6 +77,9 @@ window.TC = window.TC || {};
     }
     return null;
   };
+
+  /** Point situé en Corse (rectangle englobant l'île). */
+  G.estCorse = (p) => p.lat > 41.3 && p.lat < 43.1 && p.lng > 8.5 && p.lng < 9.65;
 
   TC.geo = G;
 })(window.TC);

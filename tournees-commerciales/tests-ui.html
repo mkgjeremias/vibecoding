@@ -12,14 +12,13 @@
   </style>
 </head>
 <body>
-  <!-- Parcours automatique de l'interface : chaque écran, chaque action principale. Les données du navigateur sont restaurées à la fin. -->
+  <!-- Parcours automatique de l'interface. Les données du navigateur sont sauvegardées puis restaurées. -->
   <div id="rapport"><b id="resume-ui">Tests interface en cours…</b><div id="etapes-ui"></div></div>
   <header class="barre"><nav id="nav"></nav><label class="profil">Profil <select id="profil"></select></label></header>
   <main id="vue"></main>
   <div id="fiche"></div>
   <div id="toast"></div>
   <script>
-    // isole les données de l'utilisateur pendant le test
     window.__sauvegarde = {};
     try {
       for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); window.__sauvegarde[k] = localStorage.getItem(k); }
@@ -27,7 +26,6 @@
     } catch (e) {}
     window.__erreurs = [];
     window.onerror = function (msg, src, ligne) { window.__erreurs.push(msg + ' (' + String(src).split('/').pop() + ':' + ligne + ')'); };
-    window.confirm = function () { return true; };
   </script>
   <script src="vendor/leaflet/leaflet.js"></script>
   <script src="data/communes.js"></script>
@@ -45,8 +43,9 @@
     const res = [];
     const $ = (s) => document.querySelector(s);
     const $$ = (s) => [...document.querySelectorAll(s)];
-    const aller = (r) => { history.replaceState(null, '', '#/' + r); TC.app.render(); };
+    const aller = (r) => { history.replaceState(null, '', '#' + r); TC.app.render(); };
     const changer = (el, v) => { if (typeof v === 'boolean') el.checked = v; else el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); };
+    const texte = (s) => ($(s) ? $(s).textContent : '');
     function etape(nom, fn) {
       const avant = window.__erreurs.length;
       try {
@@ -57,100 +56,132 @@
     }
     const verifier = (cond, msg) => { if (!cond) throw new Error(msg); };
 
-    etape('Planifier : tournée sur plusieurs jours affichée', () => {
-      aller('planifier');
-      verifier($$('.tournee-item').length >= 2, 'liste des tournées');
-      verifier($$('.jour').length >= 2, 'plusieurs jours');
-      verifier($('.bandeau.info'), 'bandeau multi-jours');
-      verifier($('.fin-jour.nuit'), 'nuit sur place');
+    etape('Commercial : navigation réduite à Préparer et Ma tournée', () => {
+      aller('preparer');
+      const liens = $$('#nav a').map((a) => a.textContent);
+      verifier(liens.join(',') === 'Préparer,Ma tournée', 'navigation : ' + liens.join(','));
+      verifier($('[data-action=prep-nouvelle]'), 'bouton nouvelle tournée');
+      verifier($$('.liste-tournees .tournee-item').length >= 2, 'tournées préparées');
+    });
+    etape('Étape 1 : départements triés, le plus chargé en avant, carte', () => {
+      $('[data-action=prep-nouvelle]').click();
+      verifier(texte('.etapes-parcours .en-cours').includes('Où aller'), 'étape en cours visible');
+      verifier($('.departements li.plus-charge'), 'département le plus chargé');
+      const totaux = $$('.dep-total').map((x) => Number(x.textContent));
+      verifier(totaux.every((v, i) => i === 0 || v <= totaux[i - 1]), 'tri décroissant');
+      verifier($('[data-action=prep-suivant]').disabled, 'Suivant désactivé sans département');
+      verifier($$('#carte-prep .pin-dep').length > 5, 'carte des départements');
+      changer($('[data-action=prep-dep]'), true);
+      verifier(!$('[data-action=prep-suivant]').disabled, 'Suivant activé');
+      $('[data-action=prep-suivant]').click();
+    });
+    etape('Étape 2 : raisons en clair, pas de score, filtres', () => {
+      verifier(texte('.etapes-parcours .en-cours').includes('Qui voir'), 'étape 2');
+      verifier($$('.comptes-choix li').length > 0, 'comptes proposés');
+      verifier($('.raisons'), 'raisons affichées');
+      verifier(!/pts|score/i.test(texte('.comptes-choix')), 'aucun score affiché');
+      const n = $$('.comptes-choix li').length;
+      changer($('[data-action=prep-activite]'), 'industrie');
+      verifier($$('.comptes-choix li').length <= n, 'filtre activité');
+      changer($('[data-action=prep-activite]'), 'toutes');
+    });
+    etape('Étape 2 : présélection automatique et compteur en direct', () => {
+      $('[data-action=prep-preselection]').click();
+      verifier($$('.comptes-choix li.choisi').length >= 1, 'comptes présélectionnés');
+      verifier(/visite/.test(texte('.compteur-direct')) && /km/.test(texte('.compteur-direct')) && /jour/.test(texte('.compteur-direct')), 'compteur');
+      const avant = texte('.compteur-direct');
+      const libre = $$('[data-action=prep-compte]').find((x) => !x.checked);
+      if (libre) { changer(libre, true); verifier(texte('.compteur-direct') !== avant, 'compteur mis à jour'); }
+      $('[data-action=prep-suivant]').click();
+    });
+    etape('Étape 3 : heures à proposer, confirmation des rendez-vous, tournée prête', () => {
+      verifier(texte('.etapes-parcours .en-cours').includes('Caler'), 'étape 3');
+      verifier($$('.etape').length >= 1, 'visites');
+      verifier($('.etape a[href^="tel:"]'), 'téléphone');
+      verifier(texte('.etape .heure small').includes('heure à proposer'), 'heure à proposer');
+      verifier(!$('.bandeau.pret'), 'pas encore prête');
+      while ($('[data-action=confirmer-rdv]:not(.ok)')) $('[data-action=confirmer-rdv]:not(.ok)').click();
+      verifier($('.bandeau.pret'), 'tournée prête quand tout est confirmé');
       verifier($('.estimation'), 'mention estimation');
-      verifier($('#carte-tournee .leaflet-container, #carte-tournee.leaflet-container'), 'carte');
     });
-    etape('Planifier : proposition de découpage puis acceptation', () => {
-      $$('.tournee-item')[1].click();
-      verifier($('.bandeau.proposition'), 'proposition affichée');
-      $('[data-action=refuser-decoupage]').click();
-      verifier($('.bandeau.discret'), 'refus mémorisé');
-      $('[data-action=revoir-decoupage]').click();
-      $('[data-action=accepter-decoupage]').click();
-      verifier($$('.jour').length >= 2, 'découpage appliqué');
-    });
-    etape('Planifier : optimiser, déplacer, durée, recalcul', () => {
-      $('[data-action=optimiser]').click();
-      const avant = $$('.etape .heure b').map((x) => x.textContent).join();
-      changer($('[data-action=duree][data-i="0"]'), '120');
-      const apres = $$('.etape .heure b').map((x) => x.textContent).join();
-      verifier(avant !== apres, 'horaires recalculés après changement de durée');
-      const premier = $('.etape .titre').textContent;
-      $('[data-action=descendre][data-i="0"]').click();
-      verifier($$('.etape .titre')[1].textContent === premier, 'étape déplacée');
-    });
-    etape('Planifier : créneau prospection et ajout d’un prospect', () => {
+    etape('Étape 3 : déplacement, durée, prospection, retour à l’étape 2', () => {
+      if ($$('.etape').length > 1) {
+        const premier = texte('.etape .titre');
+        $('[data-action=descendre][data-i="0"]').click();
+        verifier($$('.etape .titre')[1].textContent === premier, 'visite déplacée');
+        verifier($('.etape .alerte-ligne'), 'avertissement : heure confirmée décalée');
+      }
+      // les rendez-vous sont confirmés : l'heure affichée reste celle convenue, l'écart est signalé
+      const premier = $('.etape');
+      changer($('[data-action=duree][data-i="0"]'), '180');
+      verifier($$('.etape').length === 1 || $$('.etape .alerte-ligne').length >= 1, 'horaires recalculés, écart signalé');
+      // une visite non confirmée affiche l'heure recalculée
+      const dernier = $$('[data-action=confirmer-rdv]').at(-1);
+      const iDernier = dernier.dataset.i;
+      dernier.click();
+      const avant = $$('.etape .heure b').at(-1).textContent;
+      changer($('[data-action=duree][data-i="0"]'), '60');
+      verifier($$('.etape').length === 1 || $$('.etape .heure b').at(-1).textContent !== avant, 'heure proposée recalculée (étape ' + iDernier + ')');
       changer($('[data-action=prospection][data-jour="0"]'), true);
-      verifier($('.prospection'), 'créneau affiché');
-      const n = $$('.etape').length;
-      const b = $('.prospection [data-action=ajouter]');
-      if (b) { b.click(); verifier($$('.etape').length === n + 1, 'prospect ajouté'); }
+      verifier($('.prospection'), 'créneau prospection');
+      $('[data-action=prep-retour]').click();
+      verifier(texte('.etapes-parcours .en-cours').includes('Qui voir'), 'retour étape 2');
+      $('[data-action=prep-suivant]').click();
+      $('[data-action=prep-quitter]').click();
+      verifier($$('.liste-tournees .tournee-item').length >= 3, 'nouvelle tournée dans la liste');
     });
-    etape('Planifier : ajout d’une suggestion et recherche', () => {
-      const n = $$('.etape').length;
-      $('.suggestions [data-action=ajouter]').click();
-      verifier($$('.etape').length === n + 1, 'suggestion ajoutée');
-      const r = $('[data-action=recherche]');
-      r.value = 'chauffage';
-      r.dispatchEvent(new Event('input', { bubbles: true }));
-      verifier($$('#resultats-recherche li').length > 0, 'résultats de recherche');
+    etape('Tournée FC à découper : proposition puis acceptation', () => {
+      const etat = TC.app.etat;
+      const fc = etat.data.commerciaux.find((c) => c.secteurId === 'FC');
+      verifier(etat.profil.commercialId === fc.id, 'profil par défaut : commercial FC');
+      const t2 = etat.data.tournees.filter((t) => t.commercialId === fc.id && t.id.startsWith('t_')).sort((a, b) => a.date.localeCompare(b.date))[1];
+      $('[data-action=prep-ouvrir][data-id="' + t2.id + '"]').click();
+      verifier($('.bandeau.proposition'), 'proposition de découpage');
+      $('[data-action=accepter-decoupage]').click();
+      verifier($$('.jour').length >= 2 && $('.fin-jour.nuit'), 'plusieurs jours, nuit sur place');
+      $('[data-action=prep-quitter]').click();
     });
-    etape('Planifier : nouvelle tournée puis suppression', () => {
-      const n = $$('.tournee-item').length;
-      $('[data-action=nouvelle-tournee]').click();
-      verifier($$('.tournee-item').length === n + 1, 'tournée créée');
-      $('[data-action=supprimer-tournee]').click();
-      verifier($$('.tournee-item').length === n + 1, 'premier clic : demande de confirmation seulement');
-      $('[data-action=supprimer-tournee]').click();
-      verifier($$('.tournee-item').length === n, 'tournée supprimée');
-    });
-    etape('Fiche compte : ouverture, étape du prospect, fermeture', () => {
-      $('.suggestions [data-action=fiche]').click();
-      verifier($('.modale'), 'fiche ouverte');
-      const sel = $('[data-action=fiche-etape]');
-      if (sel) changer(sel, 'rdv_obtenu');
+    etape('Fiche compte depuis l’étape 2', () => {
+      $('[data-action=prep-nouvelle]').click();
+      changer($('[data-action=prep-dep]'), true);
+      $('[data-action=prep-suivant]').click();
+      $('.comptes-choix [data-action=fiche]').click();
+      verifier($('.modale') && /Activités/.test(texte('.modale')), 'fiche avec activités');
       $('.modale [data-action=fermer-fiche]').click();
-      verifier(!$('.modale'), 'fiche fermée');
+      $('[data-action=prep-quitter]').click();
     });
-    etape('Ma tournée : jours, compte-rendu enregistré', () => {
+    etape('Ma tournée : jour par jour, compte-rendu enregistré', () => {
       aller('tournee');
-      verifier($$('.visite').length > 0, 'visites du jour');
-      if ($$('.onglets button').length > 1) { $$('.onglets button')[1].click(); verifier($$('.onglets button')[1].classList.contains('actif'), 'onglet jour 2'); }
+      verifier($$('.visite').length > 0, 'visites');
       $('[data-action=cr-ouvrir]').click();
-      $('[data-action=cr-resultat][data-v=positif]').click();
+      $('[data-action=cr-resultat][data-v=devis_demande]').click();
       $('[data-action=cr-puce-action]').click();
       $('[data-action=cr-puce-relance]').click();
       $('form.cr').requestSubmit();
       verifier($('.cr-ok'), 'compte-rendu enregistré');
     });
-    etape('Carte : filtres', () => {
-      aller('carte');
-      const avant = $('#compteur-carte').textContent;
-      changer($('[data-action=filtre-statut][value=client_actif]'), false);
-      verifier($('#compteur-carte').textContent !== avant, 'filtre statut');
-      changer($('[data-action=filtre-perimetre]'), 'tous');
-      verifier(parseInt($('#compteur-carte').textContent, 10) > 500, 'toute la France');
-    });
-    etape('Manager : tournées prévues par commercial', () => {
+    etape('Direction : Pilotage (synthèse, tableau, activités, carte, filtres)', () => {
       changer($('#profil'), 'manager');
-      TC.app.render();
-      verifier($$('table.equipe tbody tr').length === 12, '12 commerciaux');
-      verifier(!$$('#nav a').some((a) => a.textContent === 'Planifier'), 'navigation réduite');
+      const liens = $$('#nav a').map((a) => a.textContent);
+      verifier(liens.join(',') === 'Pilotage,Paramètres', 'navigation direction : ' + liens.join(','));
+      verifier($$('.tuile').length >= 5, 'synthèse');
+      verifier($$('table.equipe tbody tr').length === 11, '11 commerciaux');
+      verifier($$('.jauges li').length === 4, '4 activités');
+      verifier($$('#carte-secteurs .pin-dep').length === 11, 'carte des secteurs');
+      const avant = texte('.tuile b');
+      changer($('[data-action=pil-periode]'), '91');
+      verifier(texte('.tuile b') !== avant, 'période 3 mois');
+      changer($('[data-action=pil-secteur]'), 'FC');
+      verifier($$('table.equipe tbody tr').length === 1, 'filtre secteur');
+      changer($('[data-action=pil-activite]'), 'industrie');
     });
-    etape('Paramètres : modification enregistrée', () => {
+    etape('Paramètres : fréquence de visite modifiable', () => {
       aller('parametres');
-      changer($('[data-param=margeTrajetPct]'), '25');
-      verifier(TC.app.etat.data.parametres.margeTrajetPct === 25, 'marge enregistrée');
-      verifier(TC.dataService.load().parametres.margeTrajetPct === 25, 'marge relue après rechargement');
+      changer($('[data-param=frequenceAJours]'), '28');
+      verifier(TC.app.etat.data.parametres.frequenceAJours === 28, 'fréquence enregistrée');
+      verifier(TC.dataService.load().parametres.frequenceAJours === 28, 'relue après rechargement');
     });
 
-    // restauration des données du navigateur
     try {
       localStorage.clear();
       Object.entries(window.__sauvegarde).forEach(([k, v]) => localStorage.setItem(k, v));
