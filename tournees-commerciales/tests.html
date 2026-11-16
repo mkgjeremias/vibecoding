@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tests – Tournées commerciales</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 16px; color: #0f172a; background: #fff; }
+  .ok { color: #15803d; } .ko { color: #b91c1c; font-weight: 600; }
+  h2 { font-size: 15px; margin: 16px 0 4px; }
+  #resume { font-size: 18px; font-weight: 700; }
+  pre { white-space: pre-wrap; margin: 0 0 0 18px; color: #b91c1c; }
+</style>
+</head>
+<body>
+<p id="resume">Tests en cours…</p>
+<div id="resultats"></div>
+<script>
+  window.onerror = function (msg, src, ligne) {
+    document.getElementById('resume').textContent = 'ERREUR JS : ' + msg + ' (' + String(src).split('/').pop() + ':' + ligne + ')';
+  };
+</script>
+<script src="data/communes.js"></script>
+<script src="js/util.js"></script>
+<script src="js/routing/geo.js"></script>
+<script src="js/routing/provider.js"></script>
+<script src="js/routing/optimizer.js"></script>
+<script src="js/routing/planning.js"></script>
+<script src="js/domain.js"></script>
+<script src="js/seed.js"></script>
+<script src="js/tests.js"></script>
+</body>
+</html>

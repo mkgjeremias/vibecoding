@@ -1,14 +1,35 @@
 <!doctype html>
 <html lang="fr">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#1e3a5f" />
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%231e3a5f'/><circle cx='16' cy='13' r='6' fill='white'/><path d='M16 28 L10 16 H22 Z' fill='white'/></svg>" />
-    <title>Tournées commerciales</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1e3a5f">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%231e3a5f'/><circle cx='16' cy='13' r='6' fill='white'/><path d='M16 28 L10 16 H22 Z' fill='white'/></svg>">
+  <title>Tournées commerciales</title>
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="barre">
+    <div class="marque">Tournées commerciales <span class="proto">prototype · données fictives</span></div>
+    <nav id="nav" aria-label="Navigation principale"></nav>
+    <label class="profil">Profil <select id="profil"></select></label>
+  </header>
+  <main id="vue"></main>
+  <div id="fiche"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <!-- Aucune installation : bibliothèque Leaflet copiée dans vendor/, référentiel des communes dans data/. -->
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="data/communes.js"></script>
+  <script src="js/util.js"></script>
+  <script src="js/routing/geo.js"></script>
+  <script src="js/routing/provider.js"></script>
+  <script src="js/routing/optimizer.js"></script>
+  <script src="js/routing/planning.js"></script>
+  <script src="js/domain.js"></script>
+  <script src="js/seed.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
 </html>

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tests interface – Tournées commerciales</title>
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    #rapport { font: 14px/1.5 system-ui, sans-serif; background: #fff; border: 2px solid #0f172a; margin: 8px; padding: 8px 12px; }
+    #rapport .ok { color: #15803d; } #rapport .ko { color: #b91c1c; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <!-- Parcours automatique de l'interface : chaque écran, chaque action principale. Les données du navigateur sont restaurées à la fin. -->
+  <div id="rapport"><b id="resume-ui">Tests interface en cours…</b><div id="etapes-ui"></div></div>
+  <header class="barre"><nav id="nav"></nav><label class="profil">Profil <select id="profil"></select></label></header>
+  <main id="vue"></main>
+  <div id="fiche"></div>
+  <div id="toast"></div>
+  <script>
+    // isole les données de l'utilisateur pendant le test
+    window.__sauvegarde = {};
+    try {
+      for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); window.__sauvegarde[k] = localStorage.getItem(k); }
+      localStorage.clear();
+    } catch (e) {}
+    window.__erreurs = [];
+    window.onerror = function (msg, src, ligne) { window.__erreurs.push(msg + ' (' + String(src).split('/').pop() + ':' + ligne + ')'); };
+    window.confirm = function () { return true; };
+  </script>
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="data/communes.js"></script>
+  <script src="js/util.js"></script>
+  <script src="js/routing/geo.js"></script>
+  <script src="js/routing/provider.js"></script>
+  <script src="js/routing/optimizer.js"></script>
+  <script src="js/routing/planning.js"></script>
+  <script src="js/domain.js"></script>
+  <script src="js/seed.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+  window.addEventListener('load', function () {
+    const res = [];
+    const $ = (s) => document.querySelector(s);
+    const $$ = (s) => [...document.querySelectorAll(s)];
+    const aller = (r) => { history.replaceState(null, '', '#/' + r); TC.app.render(); };
+    const changer = (el, v) => { if (typeof v === 'boolean') el.checked = v; else el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); };
+    function etape(nom, fn) {
+      const avant = window.__erreurs.length;
+      try {
+        fn();
+        if (window.__erreurs.length > avant) throw new Error(window.__erreurs.slice(avant).join(' | '));
+        res.push({ nom, ok: true });
+      } catch (e) { res.push({ nom, ok: false, err: e.message }); }
+    }
+    const verifier = (cond, msg) => { if (!cond) throw new Error(msg); };
+
+    etape('Planifier : tournée sur plusieurs jours affichée', () => {
+      aller('planifier');
+      verifier($$('.tournee-item').length >= 2, 'liste des tournées');
+      verifier($$('.jour').length >= 2, 'plusieurs jours');
+      verifier($('.bandeau.info'), 'bandeau multi-jours');
+      verifier($('.fin-jour.nuit'), 'nuit sur place');
+      verifier($('.estimation'), 'mention estimation');
+      verifier($('#carte-tournee .leaflet-container, #carte-tournee.leaflet-container'), 'carte');
+    });
+    etape('Planifier : proposition de découpage puis acceptation', () => {
+      $$('.tournee-item')[1].click();
+      verifier($('.bandeau.proposition'), 'proposition affichée');
+      $('[data-action=refuser-decoupage]').click();
+      verifier($('.bandeau.discret'), 'refus mémorisé');
+      $('[data-action=revoir-decoupage]').click();
+      $('[data-action=accepter-decoupage]').click();
+      verifier($$('.jour').length >= 2, 'découpage appliqué');
+    });
+    etape('Planifier : optimiser, déplacer, durée, recalcul', () => {
+      $('[data-action=optimiser]').click();
+      const avant = $$('.etape .heure b').map((x) => x.textContent).join();
+      changer($('[data-action=duree][data-i="0"]'), '120');
+      const apres = $$('.etape .heure b').map((x) => x.textContent).join();
+      verifier(avant !== apres, 'horaires recalculés après changement de durée');
+      const premier = $('.etape .titre').textContent;
+      $('[data-action=descendre][data-i="0"]').click();
+      verifier($$('.etape .titre')[1].textContent === premier, 'étape déplacée');
+    });
+    etape('Planifier : créneau prospection et ajout d’un prospect', () => {
+      changer($('[data-action=prospection][data-jour="0"]'), true);
+      verifier($('.prospection'), 'créneau affiché');
+      const n = $$('.etape').length;
+      const b = $('.prospection [data-action=ajouter]');
+      if (b) { b.click(); verifier($$('.etape').length === n + 1, 'prospect ajouté'); }
+    });
+    etape('Planifier : ajout d’une suggestion et recherche', () => {
+      const n = $$('.etape').length;
+      $('.suggestions [data-action=ajouter]').click();
+      verifier($$('.etape').length === n + 1, 'suggestion ajoutée');
+      const r = $('[data-action=recherche]');
+      r.value = 'chauffage';
+      r.dispatchEvent(new Event('input', { bubbles: true }));
+      verifier($$('#resultats-recherche li').length > 0, 'résultats de recherche');
+    });
+    etape('Planifier : nouvelle tournée puis suppression', () => {
+      const n = $$('.tournee-item').length;
+      $('[data-action=nouvelle-tournee]').click();
+      verifier($$('.tournee-item').length === n + 1, 'tournée créée');
+      $('[data-action=supprimer-tournee]').click();
+      verifier($$('.tournee-item').length === n, 'tournée supprimée');
+    });
+    etape('Fiche compte : ouverture, étape du prospect, fermeture', () => {
+      $('.suggestions [data-action=fiche]').click();
+      verifier($('.modale'), 'fiche ouverte');
+      const sel = $('[data-action=fiche-etape]');
+      if (sel) changer(sel, 'rdv_obtenu');
+      $('.modale [data-action=fermer-fiche]').click();
+      verifier(!$('.modale'), 'fiche fermée');
+    });
+    etape('Ma tournée : jours, compte-rendu enregistré', () => {
+      aller('tournee');
+      verifier($$('.visite').length > 0, 'visites du jour');
+      if ($$('.onglets button').length > 1) { $$('.onglets button')[1].click(); verifier($$('.onglets button')[1].classList.contains('actif'), 'onglet jour 2'); }
+      $('[data-action=cr-ouvrir]').click();
+      $('[data-action=cr-resultat][data-v=positif]').click();
+      $('[data-action=cr-puce-action]').click();
+      $('[data-action=cr-puce-relance]').click();
+      $('form.cr').requestSubmit();
+      verifier($('.cr-ok'), 'compte-rendu enregistré');
+    });
+    etape('Carte : filtres', () => {
+      aller('carte');
+      const avant = $('#compteur-carte').textContent;
+      changer($('[data-action=filtre-statut][value=client_actif]'), false);
+      verifier($('#compteur-carte').textContent !== avant, 'filtre statut');
+      changer($('[data-action=filtre-perimetre]'), 'tous');
+      verifier(parseInt($('#compteur-carte').textContent, 10) > 500, 'toute la France');
+    });
+    etape('Manager : tournées prévues par commercial', () => {
+      changer($('#profil'), 'manager');
+      TC.app.render();
+      verifier($$('table.equipe tbody tr').length === 12, '12 commerciaux');
+      verifier(!$$('#nav a').some((a) => a.textContent === 'Planifier'), 'navigation réduite');
+    });
+    etape('Paramètres : modification enregistrée', () => {
+      aller('parametres');
+      changer($('[data-param=margeTrajetPct]'), '25');
+      verifier(TC.app.etat.data.parametres.margeTrajetPct === 25, 'marge enregistrée');
+      verifier(TC.dataService.load().parametres.margeTrajetPct === 25, 'marge relue après rechargement');
+    });
+
+    // restauration des données du navigateur
+    try {
+      localStorage.clear();
+      Object.entries(window.__sauvegarde).forEach(([k, v]) => localStorage.setItem(k, v));
+    } catch (e) {}
+    const ko = res.filter((r) => !r.ok).length;
+    $('#resume-ui').textContent = (ko ? 'ÉCHEC' : 'OK') + ' : ' + (res.length - ko) + ' / ' + res.length + ' parcours réussis';
+    $('#resume-ui').className = ko ? 'ko' : 'ok';
+    $('#etapes-ui').innerHTML = res.map((r) => '<div class="' + (r.ok ? 'ok' : 'ko') + '">' + (r.ok ? '✓ ' : '✗ ') + r.nom + (r.ok ? '' : ' — ' + r.err) + '</div>').join('');
+  });
+  </script>
+</body>
+</html>
