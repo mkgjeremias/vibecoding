@@ -157,12 +157,26 @@
   }
 
   // ------------------------------------------------------------------ cartes Leaflet
+  /*
+   * Fond de carte : Plan IGN de la Géoplateforme (service public, gratuit, sans clé, Licence Ouverte Etalab).
+   * Les serveurs d'OpenStreetMap refusent les pages ouvertes depuis un fichier local (pas d'en-tête Referer).
+   */
+  const FOND_DE_CARTE = {
+    url: 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/png&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}',
+    options: {
+      minZoom: 2,
+      maxZoom: 18,
+      attribution: '© <a href="https://www.ign.fr/">IGN</a> – Géoplateforme',
+    },
+  };
   function nouvelleCarte(el) {
     const map = L.map(el, { preferCanvas: true, zoomSnap: 0.5 });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 18,
-      attribution: '© contributeurs OpenStreetMap',
-    }).addTo(map);
+    const fond = L.tileLayer(FOND_DE_CARTE.url, FOND_DE_CARTE.options).addTo(map);
+    // si le fond ne se charge pas (pas de réseau, page intégrée qui bloque les images externes), on le dit
+    fond.once('tileerror', () => {
+      const msg = L.DomUtil.create('div', 'carte-sans-fond', el);
+      msg.textContent = 'Fond de carte indisponible ici (réseau ou page intégrée) : les comptes et trajets restent affichés.';
+    });
     A.cartes.push(map);
     return map;
   }
@@ -755,7 +769,7 @@
     document.getElementById('profil').innerHTML =
       '<optgroup label="Commerciaux">' + opts + '</optgroup><option value="manager"' + (A.profil.kind === 'manager' ? ' selected' : '') + '>Direction commerciale (manager)</option>';
     document.getElementById('nav').innerHTML = routes()
-      .map((r) => '<a href="#/' + r[0] + '"' + (r[0] === A.route ? ' class="actif" aria-current="page"' : '') + '>' + r[1] + '</a>')
+      .map((r) => '<a href="#' + r[0] + '"' + (r[0] === A.route ? ' class="actif" aria-current="page"' : '') + '>' + r[1] + '</a>')
       .join('');
   }
 
@@ -774,6 +788,25 @@
   }
 
   // ------------------------------------------------------------------ événements
+  /**
+   * Confirmation en deux clics, sans fenêtre du navigateur (bloquée dans certaines pages intégrées) :
+   * le premier clic change le libellé du bouton, le second (dans les 5 s) valide.
+   */
+  function confirmer(el, libelle) {
+    if (el.dataset.confirme === '1') return true;
+    const initial = el.textContent;
+    el.dataset.confirme = '1';
+    el.textContent = libelle + ' ?';
+    el.classList.add('a-confirmer');
+    setTimeout(() => {
+      if (!el.isConnected) return;
+      el.dataset.confirme = '';
+      el.textContent = initial;
+      el.classList.remove('a-confirmer');
+    }, 5000);
+    return false;
+  }
+
   function surClic(ev) {
     const el = ev.target.closest('[data-action]');
     if (!el) return;
@@ -797,7 +830,7 @@
         break;
       }
       case 'supprimer-tournee':
-        if (t && confirm('Supprimer cette tournée ?')) {
+        if (t && confirmer(el, 'Confirmer la suppression')) {
           TC.dataService.deleteTournee(t.id);
           A.data.tournees = A.data.tournees.filter((x) => x.id !== t.id);
           A.tourneeId = null;
@@ -884,7 +917,7 @@
         el.closest('form').elements.relance.value = el.dataset.v;
         break;
       case 'reinitialiser':
-        if (confirm('Effacer toutes les modifications et régénérer les données de démonstration ?')) {
+        if (confirmer(el, 'Confirmer : tout effacer et régénérer')) {
           A.data = TC.dataService.reset();
           indexer();
           A.tourneeId = A.maTourneeId = A.ficheId = null;

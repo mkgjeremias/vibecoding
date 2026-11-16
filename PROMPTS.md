@@ -42,3 +42,19 @@ fais quelque chose de simple alors, remplace node.js
 ## 2026-11-16
 
 oui et me faire voir le rendu, comment je fais ?
+
+## 2026-11-16
+
+pourquoi je ne vois pas le fond de la cart e?
+
+## 2026-11-16
+
+(capture d'écran) voici ce que je vois : tuiles « Access blocked » 403 d'OpenStreetMap
+
+## 2026-11-16
+
+est-ce que je peux partager la page à Claude pour travailler sur le fond et te donner des directions plus claires
+
+## 2026-11-16
+
+oui (publier la page sur claude.ai, commit et push de la correction du fond de carte)

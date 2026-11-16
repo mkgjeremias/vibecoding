@@ -134,6 +134,12 @@ li.pause { list-style: none; font-size: 13px; color: var(--attention); padding: 
 /* marqueurs de carte */
 .pin-domicile { background: var(--marque); color: #fff; border-radius: 50%; display: grid !important; place-items: center; font-size: 16px; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
 .pin-etape { background: #fff; color: var(--marque); border: 2px solid var(--marque); border-radius: 50%; display: grid !important; place-items: center; font-size: 12px; font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,.35); }
+.carte-sans-fond {
+  position: absolute; z-index: 500; left: 50%; top: 10px; transform: translateX(-50%);
+  max-width: 90%; background: #fffbeb; color: #92400e; border: 1px solid #fcd34d;
+  border-radius: 8px; padding: 6px 10px; font-size: 13px; pointer-events: none;
+}
+button.a-confirmer { background: var(--danger); border-color: var(--danger); color: #fff; text-decoration: none; padding: 4px 10px; }
 .popup-actions { display: flex; gap: 6px; margin-top: 6px; }
 .popup-actions button { padding: 3px 10px; }
 

@@ -57,5 +57,5 @@ Les statuts sont calculés, jamais saisis : client actif, client à risque, pros
 ## Limites connues
 
 - Le vol d'oiseau sous-estime les trajets en relief et autour des estuaires. Seules la Gironde et la Loire sont signalées.
-- Le fond de carte OpenStreetMap public ne convient pas à une production.
+- Fond de carte : Plan IGN de la Géoplateforme (OpenStreetMap refuse les pages ouvertes en local). À valider pour une production.
 - Les comptes sont positionnés au centre de leur commune.

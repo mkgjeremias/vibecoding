@@ -11,7 +11,7 @@ Aucune installation : HTML, CSS et JavaScript, sans framework ni Node.js.
 1. Ouvrir `index.html` dans Chrome, Edge ou Firefox (double-clic).
 2. Choisir un profil en haut à droite : un des 12 commerciaux, ou la direction commerciale.
 
-Seul le fond de carte (tuiles OpenStreetMap) passe par Internet. Tout le reste fonctionne hors ligne.
+Seul le fond de carte (Plan IGN de la Géoplateforme, service public gratuit et sans clé) passe par Internet. Tout le reste fonctionne hors ligne.
 
 ## Tests
 
@@ -72,6 +72,6 @@ js/app.js             interface
 - Vol d'oiseau sous-estimé en relief et autour des estuaires (seules la Gironde et la Loire sont signalées).
 - Pas de mode hors ligne complet (la page doit avoir été ouverte), pas de CRM branché, pas d'authentification.
 - Données stockées dans le navigateur uniquement : elles ne sont pas partagées entre appareils.
-- Fond de carte OpenStreetMap public, non adapté à une production.
+- Fond de carte : Plan IGN (Géoplateforme). Les serveurs d'OpenStreetMap refusent les pages ouvertes depuis un fichier local ; en production, vérifier les conditions d'usage ou choisir un fournisseur sous contrat.
 - Positions des comptes au centre de leur commune.
 - Aucune géolocalisation du commercial (règles CNIL).
